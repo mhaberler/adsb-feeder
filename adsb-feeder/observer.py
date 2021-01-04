@@ -33,7 +33,6 @@ import time
 import re
 import errno
 import sbs1
-import utils
 from collections import Counter
 
 
