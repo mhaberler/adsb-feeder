@@ -1,9 +1,9 @@
 const WebSocket = require('ws');
 
-var myArgs = process.argv.slice(2);
-console.log('myArgs: ', myArgs);
+var args = process.argv.slice(2);
+console.log('args: ', args);
 
-var uri = myArgs[0];
+var uri = args[0];
 var bbox = {
     "min_latitude": 46,
     "max_latitude": 47,
