@@ -2,7 +2,7 @@
 
 run like:
 
-python combine.py --upstream  tcp:193.228.47.165:30003 --upstream   data.adsbhub.org:5002
+python main.py --upstream  tcp:193.228.47.165:30003 --upstream   data.adsbhub.org:5002
   --reporter tcp:1234
   --websocket ws://127.0.0.1:9000
   -l DEBUG
@@ -12,15 +12,18 @@ python combine.py --upstream  tcp:193.228.47.165:30003 --upstream   data.adsbhub
 clients:
 
   telnet 127.0.0.1 1079
-  websocat ws://127.0.0.1:9000
-  websocat "ws://127.0.0.1:9000?min_latitude=45&max_latitude=47&milongitude=15&max_longitude=17"
+  websocat ws://user:pass@127.0.0.1:9000
+  websocat "ws://user:pass@127.0.0.1:9000?min_latitude=45&max_latitude=47&min_longitude=15&max_longitude=17"
 
-update bounding box by sending one of:
+update bounding box by sending a JSON bounding box like so:
+
+select an area:
 {  "min_latitude": 42,  "max_latitude": 43, "min_longitude": 15,  "max_longitude":  17,  "min_altitude": -100, "max_altitude": 10000000}
+full feed:
 {  "min_latitude": -90, "max_latitude": 90, "min_longitude": -180, "max_longitude":  180,  "min_altitude": -100, "max_altitude": 10000000}
 
 profile:
- python -m cProfile -o profile.stats combined.py --upstream  tcp:193.228.47.165:30003  --reporter tcp:1234 --websocket ws://127.0.0.1:9000 -l IN --downstream tcp:1079 --permanent  --upstream   tcp:data.adsbhub.org:5002
+ python -m cProfile -o profile.stats main.py --upstream  tcp:193.228.47.165:30003  --reporter tcp:1234 --websocket ws://127.0.0.1:9000 -l IN --downstream tcp:1079 --permanent  --upstream   tcp:data.adsbhub.org:5002
 
 """
 
@@ -265,18 +268,8 @@ class StateResource(Resource):
         self.websocket_factory = websocket_factory
 
     def render_GET(self, request):
-        # 2021-01-04 10:54:29,684.684 DEBUG combined.py 239
-        # render_GET request=<Request at 0x7f99b18716d0 method=GET
-        # uri=/?foo=bE&bar=1,2,a clientproto=HTTP/1.1>
-        # args={b'foo': [b'bE'], b'bar': [b'1,2,a']}
         log.debug(f'render_GET request={request} args={request.args}')
         rates, distribution, observations, span = self.observer.stats()
-        # path = request.path
-        # port="UNKNOWN"
-        # host = request.getHost()
-        # url = request.prePathURL()
-        # uri = request.uri
-        # secure = (request.isSecure() and "securely") or "insecurely"
         request.setHeader("Content-Type", "text/html; charset=utf-8")
         distribution_table = ""
         for k,v in distribution:
@@ -474,6 +467,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # with cProfile.Profile() as pr:
-    #
-    # pr.print_stats()
