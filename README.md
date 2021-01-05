@@ -10,7 +10,7 @@ python adsb-feeder/main.py <options>
 
 Options are:
 connect to an SBS1 feed like dump1090 port 30003:
---upstream tcp:<ip4 or hostname>:30003 
+--upstream tcp:<ip4 or hostname>:30003
 
 connect to the ADSBHub.org feed aggregator:
 --upstream tcp:data.adsbhub.org:5002
@@ -35,6 +35,14 @@ set the log level:
 I run reporter and websockets services behind an nginx SSL proxy, see nginx-fragments.conf .
 
 for a systemd service see adsbhub.service .
+
+## leaflet demo
+
+This shows dynamically updated markers for each tracked plane. The feed's bounding box
+is dynamically updated on pan/zoom/drag for minimizing traffic.
+
+
+You need to edit leaflet/index.html for host and credentials first.
 
 ## python client
 
@@ -76,7 +84,7 @@ $ websocat 'wss://<user>:<password>@<host>/adsb/?min_latitude=46&max_latitude=47
 
 Any subsequent updates sent by the client override the initial bounding box.
 
-## credentials
+## Credentials
 
 Drop me a mail for a test user/password credential.
 
