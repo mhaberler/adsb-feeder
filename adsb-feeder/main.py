@@ -158,11 +158,14 @@ class WSServerProtocol(WebSocketServerProtocol):
         log.debug(f"protocols: {request.protocols}")
         log.debug(f"extensions: {request.extensions}")
         self.peer = request.peer
+
         self.bbox = boundingbox.BoundingBox()
         self.bbox.fromParams(request.params)
 
         if 'authorization' not in request.headers:
             raise ConnectionDeny( 4000, u'Missing authorization')
+
+        self.forwarded_for = request.headers.get('x-forwarded-for','')
 
         authheader = request.headers['authorization']
         log.debug(f"authheader {authheader}")
@@ -302,7 +305,7 @@ class StateResource(Resource):
 
         ws_clients = ""
         for w in self.feeder_factory.websocket_clients:
-            ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.user}</td></tr>\n"
+            ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.user}</td><td>{w.forwarded_for}</td></tr>\n"
 
         aircraft = """
 <H2>Aircraft observed</H2>
