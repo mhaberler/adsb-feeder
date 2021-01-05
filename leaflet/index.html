@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+  <title>Leaflet ADSB-Feeder demo</title>
+
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="shortcut icon" type="image/x-icon" href="docs/images/favicon.ico" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" integrity="sha512-xodZBNTC5n17Xt2atTPuE1HxjVMSvLVW9ocqUKLsCC5CXdbqCmblAshOMAS6/keqq/sMZMZ19scR4PsZChSR7A==" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" integrity="sha512-XQoYMqMTK8LvdxXYG3nZ448hOEQiglfqkJs1NOQV44cWnUrBc8PkAOcXy20w0vlaXaVUearIOBhiXZ5V3ynxwA==" crossorigin=""></script>
+
+</head>
+
+<body>
+
+  <div id="mapid" style="width: 600px; height: 400px;"></div>
+  <script>
+
+    // adapt as needed
+    var wssUri = "wss://<user>:<password>p@<host>/adsb/"
+
+    var center = [47, 15];
+    var initialZoom = 8;
+
+
+    var map = L.map('mapid').setView(center, initialZoom);
+
+    L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw', {
+      maxZoom: 18,
+      attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ' +
+        'Imagery © <a href="https://www.mapbox.com/">Mapbox</a>',
+      id: 'mapbox/streets-v11',
+      tileSize: 512,
+      zoomOffset: -1
+    }).addTo(map);
+
+    var markers = {};
+
+    // establish websocket connection
+    var ws = new WebSocket(wssUri);
+
+    ws.onopen = function() {
+      console.log("Opened");
+      // send an inital bbox update
+      updateBBox();
+    };
+
+    ws.onclose = function() {
+      console.log("Closed");
+    };
+
+    ws.onmessage = function(event) {
+      feature = JSON.parse(event.data);
+      // feature comes in as:
+      //
+      // {
+      //   "type": "Feature",
+      //   "geometry": {
+      //     "type": "Point",
+      //     "coordinates": [15.79151, 46.70595, 34000]
+      //   },
+      //   "properties": {
+      //     "icao24": "4BB264",
+      //     "callsign": "THY3UL",
+      //     "squawk": "3273",
+      //     "time": 1609858269.40257,
+      //     "speed": 447.0,
+      //     "vspeed": 352,
+      //     "heading": 289.0
+      //   }
+      // }
+      if (feature.geometry.type == "Point") {
+        let icao = feature.properties.icao24;
+        let lat = feature.geometry.coordinates[1];
+        let lon = feature.geometry.coordinates[0];
+        let alt = feature.geometry.coordinates[2];
+        if (markers[icao] == undefined) {
+          // first seen this plane
+          m = L.marker([lat, lon]).addTo(map);
+          m.bindPopup(icao)
+          m.on('click', function(e) {
+            let f = e.sourceTarget;
+            console.log('Marker clicked on', f);
+
+            var popup = e.target.getPopup();
+            popup.setContent(f.properties.icao24 + " " + f.altitude);
+          });
+          markers[icao] = m;
+        } else {
+          // already seen, just move it
+          m = markers[icao];
+          m.setLatLng([lat, lon]);
+        }
+        markers[icao].properties = feature.properties;
+        markers[icao].altitude = alt;
+      }
+    };
+
+    // dynamically send a bounding box update to the server
+    function updateBBox() {
+      let b = map.getBounds();
+      let bbox = {}
+      bbox["min_latitude"] = b.getSouth();
+      bbox["max_latitude"] = b.getNorth();
+      bbox["min_longitude"] = b.getWest();
+      bbox["max_longitude"] = b.getEast();
+
+      console.log("updating bbox:", bbox);
+      ws.send(JSON.stringify(bbox));
+    }
+    map.on('moveend zoomend resetview', updateBBox);
+
+  </script>
+
+</body>
+
+</html>
