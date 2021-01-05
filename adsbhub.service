@@ -1,0 +1,24 @@
+[Unit]
+Description=ADS-B Feed Aggregator
+
+[Service]
+
+ExecStart=<path to python> /home/<user>/adsb-feeder/adsb-feeder/main.py \
+	--upstream  tcp:1.2.3.4:30003  \
+	--upstream tcp:data.adsbhub.org:5002 \
+	--reporter tcp:9001:interface=127.0.0.1  \
+	--websocket ws://127.0.0.1:9000  \
+	--log INFO  \
+	--permanent
+
+
+
+WorkingDirectory=/var/www/adsb-feeder
+
+User=<user>
+Group=<group>
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
