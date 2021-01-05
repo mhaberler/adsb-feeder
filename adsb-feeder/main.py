@@ -52,6 +52,7 @@ import argparse
 import datetime
 import base64
 from collections import Counter
+import geojson
 
 import observer
 import boundingbox
@@ -59,13 +60,13 @@ import boundingbox
 appName = "Feeder"
 facility = syslog.LOG_LOCAL1
 
-def within(msg, bbox):
-    if msg['lat'] < bbox.min_latitude: return False
-    if msg['lat'] > bbox.max_latitude: return False
-    if msg['lon'] < bbox.min_longitude: return False
-    if msg['lon'] > bbox.max_longitude: return False
-    if msg['altitude'] < bbox.min_altitude: return False
-    if msg['altitude'] > bbox.max_altitude: return False
+def within(lat, lon, alt, bbox):
+    if lat < bbox.min_latitude: return False
+    if lat > bbox.max_latitude: return False
+    if lon < bbox.min_longitude: return False
+    if lon > bbox.max_longitude: return False
+    if alt < bbox.min_altitude: return False
+    if alt > bbox.max_altitude: return False
     return True
 
 class UpstreamProtocol(basic.LineOnlyReceiver):
@@ -88,14 +89,19 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
 
     def lineReceived(self, line):
         self.feedstats['lines'] += 1
-        m = self.factory.flight_observer.parse(line.decode()) # a dict
+        # typeof(m) = Observation()
+        m = self.factory.flight_observer.parse(line.decode())
         if m:
-            r = (json.dumps(m) + '\n').encode("utf8")
+            lat = m.getLat()
+            lon = m.getLon()
+            alt = m.getAltitude()
+
+            r = (geojson.dumps(m.as_geojson()) + '\n').encode("utf8")
             for c in self.factory.downstream_clients:
-                if within(m, c.bbox):
+                if within(lat, lon, alt, c.bbox):
                     c.transport.write(r)
             for ws in self.factory.websocket_clients:
-                if within(m, ws.bbox):
+                if within(lat, lon, alt, ws.bbox):
                     ws.sendMessage(r, False)
 
 class UpstreamFactory(ReconnectingClientFactory):

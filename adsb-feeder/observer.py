@@ -34,6 +34,7 @@ import re
 import errno
 import sbs1
 from collections import Counter
+import geojson
 
 
 # Clean out observations this often
@@ -232,6 +233,21 @@ class Observation(object):
         }
         return d
 
+    def as_geojson(self):
+        properties = {
+            "icao24":  self.getIcao24(),
+            "callsign":  self.getcallsign(),
+            "squawk":  self.getsquawk(),
+            "time":  time.time(),
+            "speed":  self.getGroundSpeed(),
+            "vspeed":  self.getVerticalRate(),
+            "heading":  self.getHeading()
+        }
+        point = geojson.Point((self.getLon(),
+                                self.getLat(),
+                                self.getAltitude()))
+        feature = geojson.Feature(geometry=point, properties=properties)
+        return feature
 
     def dict(self):
         d = dict(self.__dict__)
@@ -284,7 +300,7 @@ class FlightObserver(object):
 
             if self.__observations[icao24].isPresentable():
                 self.__counters['observations'] += 1
-                return self.__observations[icao24].as_dict()
+                return self.__observations[icao24]
             return None
 
 
