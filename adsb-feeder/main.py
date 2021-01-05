@@ -166,6 +166,7 @@ class WSServerProtocol(WebSocketServerProtocol):
             raise ConnectionDeny( 4000, u'Missing authorization')
 
         self.forwarded_for = request.headers.get('x-forwarded-for','')
+        log.debug(f"forwarded for: {self.forwarded_for}")
 
         authheader = request.headers['authorization']
         log.debug(f"authheader {authheader}")
