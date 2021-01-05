@@ -1,0 +1,27 @@
+const WebSocket = require('ws');
+
+var myArgs = process.argv.slice(2);
+console.log('myArgs: ', myArgs);
+
+var uri = myArgs[0];
+var bbox = {
+    "min_latitude": 46,
+    "max_latitude": 47,
+    "min_longitude": 13,
+    "max_longitude": 17,
+    "min_altitude": -100,
+    "max_altitude": 10000000
+};
+
+const ws = new WebSocket(uri);
+
+ws.on('open', function open() {
+    console.log("connection opened, sending bounding box");
+    // example for dynamically changing the bbox of the updates
+    ws.send(JSON.stringify(bbox));
+});
+
+ws.on('message', function incoming(data) {
+    const msg = JSON.parse(data);
+    console.log(msg.icao24, msg.callsign, msg.lat, msg.lon, msg.altitude, msg.speed, msg.vspeed, msg.heading);
+});
