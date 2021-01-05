@@ -1,7 +1,40 @@
 # adsb-feeder
 ADS-B feed aggregator and websocket server
 
-connects to any number of feeds like dump1090:30003 or data.adsbhub.org:5002
+connects to any number of SBS1 feeds like dump1090:30003 or data.adsbhub.org:5002
+
+usage:
+
+```
+python adsb-feeder/main.py <options>
+
+Options are:
+connect to an SBS1 feed like dump1090 port 30003:
+--upstream tcp:<ip4 or hostname>:30003 
+
+connect to the ADSBHub.org feed aggregator:
+--upstream tcp:data.adsbhub.org:5002
+
+provide an unauthenticated raw TCP stream of JSON-formatted updates on port 1079:
+--downstream tcp:1079
+
+Provide a websockets server at port 9000:
+--websocket ws://127.0.0.1:9000
+
+Provide an HTML feed status page on localhost:9001
+--reporter tcp:9001:interface=127.0.0.1
+
+Connect permanently to all upstream feeds (default is to connect only if clients present):
+--permanent
+
+set the log level:
+--log INFO  (or DEBUG...)
+```
+## server setup
+
+I run reporter and websockets services behind an nginx SSL proxy, see nginx-fragments.conf .
+
+for a systemd service see adsbhub.service .
 
 ## python client
 
