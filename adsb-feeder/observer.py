@@ -99,8 +99,7 @@ class Observation(object):
     @property
     def __geo_interface__(self):
         return {
-            'type': 'Point',
-            'coordinates': (self.__lon, self.__lat, self.__altitude),
+            'type': 'Feature',
             'properties':    {
                 "icao24":   self.__icao24,
                 "callsign": self.__callsign,
@@ -109,6 +108,10 @@ class Observation(object):
                 "speed":    self.__groundSpeed,
                 "vspeed":   self.__verticalRate,
                 "heading":  self.__track
+            },
+            'geometry': {
+                'type': 'Point',
+                'coordinates': (self.__lon, self.__lat, self.__altitude)
             }
         }
 
