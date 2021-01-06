@@ -31,6 +31,7 @@ from twisted.internet import reactor
 from twisted.internet.protocol import ReconnectingClientFactory, Protocol, Factory
 from twisted.protocols import basic
 from twisted.internet.endpoints import clientFromString, serverFromString
+from twisted.internet.task import LoopingCall
 from twisted.application.internet import ClientService
 from twisted.application import internet, service
 from twisted.python.log import PythonLoggingObserver, ILogObserver
@@ -47,7 +48,8 @@ import logging
 import logging.handlers
 import syslog
 import jsonschema
-import json
+#import json
+import orjson
 import argparse
 import datetime
 import base64
@@ -91,18 +93,18 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
         self.feedstats['lines'] += 1
         # typeof(m) = Observation()
         m = self.factory.flight_observer.parse(line.decode())
-        if m:
-            lat = m.getLat()
-            lon = m.getLon()
-            alt = m.getAltitude()
-
-            r = (geojson.dumps(m.as_geojson()) + '\n').encode("utf8")
-            for c in self.factory.downstream_clients:
-                if within(lat, lon, alt, c.bbox):
-                    c.transport.write(r)
-            for ws in self.factory.websocket_clients:
-                if within(lat, lon, alt, ws.bbox):
-                    ws.sendMessage(r, False)
+        # if m:
+        #     lat = m.getLat()
+        #     lon = m.getLon()
+        #     alt = m.getAltitude()
+        #
+        #     r = (geojson.dumps(m.as_geojson()) + '\n').encode("utf8")
+        #     for c in self.factory.downstream_clients:
+        #         if within(lat, lon, alt, c.bbox):
+        #             c.transport.write(r)
+        #     for ws in self.factory.websocket_clients:
+        #         if within(lat, lon, alt, ws.bbox):
+        #             ws.sendMessage(r, False)
 
 class UpstreamFactory(ReconnectingClientFactory):
 
@@ -146,6 +148,33 @@ class UpstreamFactory(ReconnectingClientFactory):
     def del_ds_client(self, client):
         self.downstream_clients.discard(client)
         self.client_removed()
+
+def client_updater(flight_observer, feeder_factory):
+
+    if not feeder_factory.downstream_clients and not feeder_factory.websocket_clients:
+        return
+
+    # BATCH THIS!!
+    obs = flight_observer.getObservations()
+
+    for icao, o in obs.items():
+        if not o.isUpdated():
+            continue
+        if not o.isPresentable():
+            continue
+
+        lat = o.getLat()
+        lon = o.getLon()
+        alt = o.getAltitude()
+
+        r = orjson.dumps(o.as_geojson(), option=orjson.OPT_APPEND_NEWLINE)
+        for c in feeder_factory.downstream_clients:
+            if within(lat, lon, alt, c.bbox):
+                c.transport.write(r)
+        for ws in feeder_factory.websocket_clients:
+            if within(lat, lon, alt, ws.bbox):
+                ws.sendMessage(r, False)
+        o.resetUpdated()
 
 
 class WSServerProtocol(WebSocketServerProtocol):
@@ -192,6 +221,9 @@ class WSServerProtocol(WebSocketServerProtocol):
         (success, bbox, response) = self.factory.bbox_validator.validate_str(payload)
         if not success:
             log.info(f'{self.peer} bbox update failed: {response}')
+
+            #self.sendMessage(json.dumps(response).encode("utf8"), isBinary)
+            #r = orjson.dumps(response, option=orjson.OPT_APPEND_NEWLINE)
 
             self.sendMessage(json.dumps(response).encode("utf8"), isBinary)
         else:
@@ -471,6 +503,12 @@ def main():
         root.putChild(b"", StateResource(flight_observer,feeder_factory,
                                          downstream_factory, websocket_factory))
         webserver = serverFromString(reactor, args.reporter).listen(Site(root))
+
+
+    lc = LoopingCall(client_updater,
+                     flight_observer, feeder_factory)
+    lc.start(0.3)
+
 
     reactor.run()
 

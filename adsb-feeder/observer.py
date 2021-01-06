@@ -182,6 +182,9 @@ class Observation(object):
     def isUpdated(self) -> bool:
         return self.__updated
 
+    def resetUpdated(self):
+        self.__updated = False
+
     def getLoggedDate(self) -> datetime:
         return self.__loggedDate
 
@@ -317,6 +320,9 @@ class FlightObserver(object):
             'messagerate':  round(self.__message_rate,1)
         }
         return (r, self._distribution(), self.__observations, OBSERVATION_CLEAN_INTERVAL)
+
+    def getObservations(self):
+        return self.__observations
 
     def cleanObservations(self, now):
         """Clean observations for planes not seen in a while
