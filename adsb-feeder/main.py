@@ -55,6 +55,7 @@ import datetime
 import base64
 from collections import Counter
 import geojson
+import geobuf
 
 import observer
 import boundingbox
@@ -93,18 +94,7 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
         self.feedstats['lines'] += 1
         # typeof(m) = Observation()
         m = self.factory.flight_observer.parse(line.decode())
-        # if m:
-        #     lat = m.getLat()
-        #     lon = m.getLon()
-        #     alt = m.getAltitude()
-        #
-        #     r = (geojson.dumps(m.as_geojson()) + '\n').encode("utf8")
-        #     for c in self.factory.downstream_clients:
-        #         if within(lat, lon, alt, c.bbox):
-        #             c.transport.write(r)
-        #     for ws in self.factory.websocket_clients:
-        #         if within(lat, lon, alt, ws.bbox):
-        #             ws.sendMessage(r, False)
+
 
 class UpstreamFactory(ReconnectingClientFactory):
 
@@ -168,23 +158,22 @@ def client_updater(flight_observer, feeder_factory):
         alt = o.getAltitude()
 
         r = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
+        pbf = geobuf.encode(o.__geo_interface__, 0,3)
+
         for c in feeder_factory.downstream_clients:
             if within(lat, lon, alt, c.bbox):
                 c.transport.write(r)
         for ws in feeder_factory.websocket_clients:
             if within(lat, lon, alt, ws.bbox):
-                ws.sendMessage(r, False)
+                if ws.geobuf:
+                    ws.sendMessage(pbf, True)
+                else:
+                    ws.sendMessage(r, False)
         o.resetUpdated()
 
 
-def hyper_task():
-    log.debug(f"hyper_task tick")
-
-def tired_task():
-    log.debug(f"tired_task tick")
-
-
 class WSServerProtocol(WebSocketServerProtocol):
+
 
     def onConnect(self, request):
         log.debug(f"Client connecting: {request.peer} version {request.version}")
@@ -197,6 +186,7 @@ class WSServerProtocol(WebSocketServerProtocol):
 
         self.bbox = boundingbox.BoundingBox()
         self.bbox.fromParams(request.params)
+        self.geobuf = 'options' in request.params and 'geobuf' in request.params['options']
 
         if 'authorization' not in request.headers:
             raise ConnectionDeny( 4000, u'Missing authorization')

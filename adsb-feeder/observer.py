@@ -105,7 +105,7 @@ class Observation(object):
                 "icao24":   self.__icao24,
                 "callsign": self.__callsign,
                 "squawk":   self.__squawk,
-                "time":     self.__altitudeTime,
+                "time":     self.__altitudeTime.timestamp(),
                 "speed":    self.__groundSpeed,
                 "vspeed":   self.__verticalRate,
                 "heading":  self.__track
