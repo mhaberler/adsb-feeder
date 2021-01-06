@@ -158,7 +158,7 @@ def client_updater(flight_observer, feeder_factory):
         alt = o.getAltitude()
 
         r = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
-        pbf = geobuf.encode(o.__geo_interface__, 0,3)
+        pbf = geobuf.encode(o.__geo_interface__)
 
         for c in feeder_factory.downstream_clients:
             if within(lat, lon, alt, c.bbox):

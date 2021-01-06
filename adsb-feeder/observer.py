@@ -101,17 +101,18 @@ class Observation(object):
         return {
             'type': 'Feature',
             'properties':    {
-                "icao24":   self.__icao24,
-                "callsign": self.__callsign,
-                "squawk":   self.__squawk,
-                "time":     self.__altitudeTime.timestamp(),
-                "speed":    self.__groundSpeed,
-                "vspeed":   self.__verticalRate,
-                "heading":  self.__track
+                "i": self.__icao24,
+                "c": self.__callsign,
+                "s": self.__squawk,
+                "t": self.__altitudeTime.timestamp(),
+                "v": self.__groundSpeed,
+                "r": self.__verticalRate,
+                "h": self.__track,
+                "a": self.__altitude
             },
             'geometry': {
                 'type': 'Point',
-                'coordinates': (self.__lon, self.__lat, self.__altitude)
+                'coordinates': (self.__lon, self.__lat)
             }
         }
 
