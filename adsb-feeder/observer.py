@@ -22,7 +22,6 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from typing import *
-import json
 import sys
 import os
 import calendar
@@ -35,7 +34,6 @@ import errno
 import sbs1
 from collections import Counter
 import geojson
-
 
 # Clean out observations this often
 OBSERVATION_CLEAN_INTERVAL = 30
@@ -97,6 +95,22 @@ class Observation(object):
     __route = None
     __image_url = None
     __transmission_types = dict()
+
+    @property
+    def __geo_interface__(self):
+        return {
+            'type': 'Point',
+            'coordinates': (self.__lon, self.__lat, self.__altitude),
+            'properties':    {
+                "icao24":   self.__icao24,
+                "callsign": self.__callsign,
+                "squawk":   self.__squawk,
+                "time":     self.__altitudeTime,
+                "speed":    self.__groundSpeed,
+                "vspeed":   self.__verticalRate,
+                "heading":  self.__track
+            }
+        }
 
     def __repr__(self):
         return f" icao {self.__icao24} logged {self.__loggedDate} alt {self.__altitude} lat {self.__lat} lon {self.__lon} speed {self.__groundSpeed} track {self.__track}"
@@ -189,10 +203,10 @@ class Observation(object):
         return self.__loggedDate
 
     def getGroundSpeed(self) -> float:
-        return round(self.__groundSpeed,1)
+        return round(self.__groundSpeed, 1)
 
     def getHeading(self) -> float:
-        return round(self.__track,1)
+        return round(self.__track, 1)
 
     def getAltitude(self) -> float:
         return self.__altitude
@@ -247,8 +261,8 @@ class Observation(object):
             "heading":  self.getHeading()
         }
         point = geojson.Point((self.getLon(),
-                                self.getLat(),
-                                self.getAltitude()))
+                               self.getLat(),
+                               self.getAltitude()))
         feature = geojson.Feature(geometry=point, properties=properties)
         return feature
 
@@ -278,7 +292,7 @@ class FlightObserver(object):
         6: 'SURVEILLANCE_ID',
         7: 'AIR_TO_AIR',
         8: 'ALL_CALL_REPLY'
-        }
+    }
     __msgByType = Counter()
     __counters = Counter(messages=0, observations=0)
 
@@ -306,18 +320,17 @@ class FlightObserver(object):
                 return self.__observations[icao24]
             return None
 
-
     def _distribution(self):
         s = sum(self.__msgByType.values())
-        for k,v in self.__msgByType.most_common():
-            p = round(v*100. / s,1)
+        for k, v in self.__msgByType.most_common():
+            p = round(v * 100. / s, 1)
             yield self.__msgTypes.get(k, 'UNKNOWN'), p
 
     def stats(self):
-        r =  {
+        r = {
             'observations': len(self.__observations),
-            'observation_rate': round(self.__observation_rate,1),
-            'messagerate':  round(self.__message_rate,1)
+            'observation_rate': round(self.__observation_rate, 1),
+            'messagerate':  round(self.__message_rate, 1)
         }
         return (r, self._distribution(), self.__observations, OBSERVATION_CLEAN_INTERVAL)
 
@@ -332,14 +345,17 @@ class FlightObserver(object):
             for icao24 in self.__observations:
                 log.debug("[%s] %s -> %s : %s" % (icao24, self.__observations[icao24].getLoggedDate(
                 ), self.__observations[icao24].getLoggedDate() + timedelta(seconds=OBSERVATION_CLEAN_INTERVAL), now))
-                if self.__observations[icao24].getLoggedDate() + timedelta(seconds= OBSERVATION_CLEAN_INTERVAL) < now:
+                if self.__observations[icao24].getLoggedDate() + timedelta(seconds=OBSERVATION_CLEAN_INTERVAL) < now:
                     log.debug("%s disappeared" % (icao24))
                     cleaned.append(icao24)
 
             for icao24 in cleaned:
                 del self.__observations[icao24]
 
-            self.__next_clean = now + timedelta(seconds = OBSERVATION_CLEAN_INTERVAL)
-            self.__message_rate = float(self.__counters['messages']) / OBSERVATION_CLEAN_INTERVAL
-            self.__observation_rate = float(self.__counters['observations']) / OBSERVATION_CLEAN_INTERVAL
+            self.__next_clean = now + \
+                timedelta(seconds=OBSERVATION_CLEAN_INTERVAL)
+            self.__message_rate = float(
+                self.__counters['messages']) / OBSERVATION_CLEAN_INTERVAL
+            self.__observation_rate = float(
+                self.__counters['observations']) / OBSERVATION_CLEAN_INTERVAL
             self.__counters.clear()

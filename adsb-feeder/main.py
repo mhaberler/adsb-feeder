@@ -167,7 +167,7 @@ def client_updater(flight_observer, feeder_factory):
         lon = o.getLon()
         alt = o.getAltitude()
 
-        r = orjson.dumps(o.as_geojson(), option=orjson.OPT_APPEND_NEWLINE)
+        r = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
         for c in feeder_factory.downstream_clients:
             if within(lat, lon, alt, c.bbox):
                 c.transport.write(r)
