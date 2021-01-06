@@ -41,6 +41,8 @@ for a systemd service see adsbhub.service .
 This shows dynamically updated markers for each tracked plane. The feed's bounding box
 is dynamically updated on pan/zoom/drag for minimizing traffic.
 
+there are two versions - one using GeoJSON updates, and one using Geobuf/Pbf encoded updates.
+To select the geobuf feed, add `?options=geobuf` to the WS URI.
 
 You need to edit leaflet/index.html for host and credentials first.
 
