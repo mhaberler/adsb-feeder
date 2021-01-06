@@ -50,23 +50,23 @@ class BBoxValidator(object):
         "properties": {
             "min_latitude": {
                 "type": "number",
-                "minimum": -90,
-                "maximum": 90
+                # "minimum": -90,
+                # "maximum": 90
             },
             "min_longitude": {
                 "type": "number",
-                "minimum": -180,
-                "maximum": 180
+                # "minimum": -180,
+                # "maximum": 180
             },
             "max_latitude": {
                 "type": "number",
-                "minimum": -90,
-                "maximum": 90
+                # "minimum": -90,
+                # "maximum": 90
             },
             "max_longitude": {
                 "type": "number",
-                "minimum": -180,
-                "maximum": 180
+                # "minimum": -180,
+                # "maximum": 180
             },
             "min_altitude": {
                 "type": "number"
