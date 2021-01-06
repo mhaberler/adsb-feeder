@@ -177,6 +177,13 @@ def client_updater(flight_observer, feeder_factory):
         o.resetUpdated()
 
 
+def hyper_task():
+    log.debug(f"hyper_task tick")
+
+def tired_task():
+    log.debug(f"tired_task tick")
+
+
 class WSServerProtocol(WebSocketServerProtocol):
 
     def onConnect(self, request):
