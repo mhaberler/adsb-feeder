@@ -48,7 +48,7 @@ import logging
 import logging.handlers
 import syslog
 import jsonschema
-#import json
+
 import orjson
 import argparse
 import datetime
@@ -56,12 +56,15 @@ import base64
 from collections import Counter
 import geojson
 import geobuf
+import jwt
+
 
 import observer
 import boundingbox
 
 appName = "Feeder"
 facility = syslog.LOG_LOCAL1
+
 
 def within(lat, lon, alt, bbox):
     if lat < bbox.min_latitude: return False
@@ -105,8 +108,7 @@ class UpstreamFactory(ReconnectingClientFactory):
 
 
     def __init__(self, flight_observer, permanent, parent):
-        self.downstream_clients = set()
-        self.websocket_clients = set()
+        self.clients = set()
         self.flight_observer = flight_observer
         self.permanent = permanent
         self.parent = parent
@@ -114,34 +116,30 @@ class UpstreamFactory(ReconnectingClientFactory):
     def client_added(self):
         if self.permanent:
             return
-        if len(self.downstream_clients) + len(self.websocket_clients) == 1:
+        if len(self.clients) == 1:
             self.parent.startService()
 
     def client_removed(self):
         if self.permanent:
             return
-        if len(self.downstream_clients) + len(self.websocket_clients) == 0:
+        if len(self.clients) == 0:
             self.parent.stopService()
 
-    def add_ws_client(self, client):
-        self.websocket_clients.add(client)
+    def registerClient(self, client):
+        log.debug(f"WS client type: {type(client)}")
+        log.debug(f"DS {isinstance(client, Downstream)}")
+        log.debug(f"WS {isinstance(client, WSServerProtocol)}")
+        self.clients.add(client)
         self.client_added()
 
-    def del_ws_client(self, client):
-        self.websocket_clients.discard(client)
+    def unregisterClient(self, client):
+        self.clients.discard(client)
         self.client_removed()
 
-    def add_ds_client(self, client):
-        self.downstream_clients.add(client)
-        self.client_added()
-
-    def del_ds_client(self, client):
-        self.downstream_clients.discard(client)
-        self.client_removed()
 
 def client_updater(flight_observer, feeder_factory):
 
-    if not feeder_factory.downstream_clients and not feeder_factory.websocket_clients:
+    if not feeder_factory.clients:
         return
 
     # BATCH THIS!!
@@ -160,15 +158,17 @@ def client_updater(flight_observer, feeder_factory):
         r = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
         pbf = geobuf.encode(o.__geo_interface__)
 
-        for c in feeder_factory.downstream_clients:
-            if within(lat, lon, alt, c.bbox):
-                c.transport.write(r)
-        for ws in feeder_factory.websocket_clients:
-            if within(lat, lon, alt, ws.bbox):
-                if ws.geobuf:
-                    ws.sendMessage(pbf, True)
-                else:
-                    ws.sendMessage(r, False)
+        for client in feeder_factory.clients:
+            if within(lat, lon, alt, client.bbox):
+                if isinstance(client, Downstream):
+                    client.transport.write(r)
+                if isinstance(client, WSServerProtocol):
+                    if not client.authenticated_user:
+                        continue
+                    if client.geobuf:
+                        client.sendMessage(pbf, True)
+                    else:
+                        client.sendMessage(r, False)
         o.resetUpdated()
 
 
@@ -183,33 +183,48 @@ class WSServerProtocol(WebSocketServerProtocol):
         log.debug(f"protocols: {request.protocols}")
         log.debug(f"extensions: {request.extensions}")
         self.peer = request.peer
-
+        self.authenticated_user = None # until after jwt decoded
         self.bbox = boundingbox.BoundingBox()
         self.bbox.fromParams(request.params)
         self.geobuf = 'options' in request.params and 'geobuf' in request.params['options']
 
-        if 'authorization' not in request.headers:
-            raise ConnectionDeny( 4000, u'Missing authorization')
+        # if 'authorization' not in request.headers:
+        #     raise ConnectionDeny( 4000, u'Missing authorization')
 
         self.forwarded_for = request.headers.get('x-forwarded-for','')
-        log.debug(f"forwarded for: {self.forwarded_for}")
+        self.host = request.headers.get('host','')
+        log.debug(f"forwarded for: {self.forwarded_for} host={self.host}")
 
-        authheader = request.headers['authorization']
-        log.debug(f"authheader {authheader}")
-        elements = authheader.split(" ")
-        if elements[0].lower() == 'basic':
-            user, _ = base64.b64decode(elements[1]).split(b":")
-            self.user = user.decode("utf8")
-            log.debug(f"user {self.user}")
-        else:
-            raise ConnectionDeny(4001, u'basic authorization required')
+        # authheader = request.headers['authorization']
+        # log.debug(f"authheader {authheader}")
+        # elements = authheader.split(" ")
+        # if elements[0].lower() == 'basic':
+        #     user, _ = base64.b64decode(elements[1]).split(b":")
+        #     self.user = user.decode("utf8")
+        #     log.debug(f"user {self.user}")
+        # else:
+        #     raise ConnectionDeny(4001, u'basic authorization required')
+
+    def authTimeout(self):
+        log.debug(f"ip={self.forwarded_for} host={self.host}: authentication timeout, disconnecting")
+        self.sendClose(code=4711, reason="timed out waiting for credentials")
 
 
     def onOpen(self):
         log.debug(f"WebSocket connection open.")
-        self.factory.feeder_factory.add_ws_client(self)
+        # start timer
+        self.auth_future = reactor.callLater(3, self.authTimeout)
+        self.factory.feeder_factory.registerClient(self)
 
     def onMessage(self, payload, isBinary):
+#
+# parse json
+# check for auth
+# check expiration
+#
+# cancel self.auth_future
+# set user etc
+
         if isBinary:
             log.debug(f"Binary message received: {len(payload)} bytes")
         else:
@@ -218,11 +233,7 @@ class WSServerProtocol(WebSocketServerProtocol):
         (success, bbox, response) = self.factory.bbox_validator.validate_str(payload)
         if not success:
             log.info(f'{self.peer} bbox update failed: {response}')
-
-            #self.sendMessage(json.dumps(response).encode("utf8"), isBinary)
-            #r = orjson.dumps(response, option=orjson.OPT_APPEND_NEWLINE)
-
-            self.sendMessage(json.dumps(response).encode("utf8"), isBinary)
+            self.sendMessage(orjson.dumps(response, option=orjson.OPT_APPEND_NEWLINE), isBinary)
         else:
             log.debug(f'{self.peer} updated bbox: {bbox}')
             self.bbox = bbox
@@ -230,13 +241,11 @@ class WSServerProtocol(WebSocketServerProtocol):
 
     def onClose(self, wasClean, code, reason):
         log.debug(f"WebSocket connection closed by {self.peer}: wasClean={wasClean} code={code} reason={reason}")
-        self.factory.feeder_factory.del_ws_client(self)
+        self.factory.feeder_factory.unregisterClient(self)
 
 class WSServerFactory(WebSocketServerFactory):
 
     protocol = WSServerProtocol
-    websocket_clients = set()
-
 
 class Downstream(Protocol):
 
@@ -246,12 +255,12 @@ class Downstream(Protocol):
     def connectionMade(self):
         log.debug(
             f'[x] downstream connection established from {self.transport.getPeer()}')
-        self.factory.feeder_factory.add_ds_client(self)
+        self.factory.feeder_factory.registerClient(self)
 
     def connectionLost(self, reason):
         log.debug(
             f'[ ] downstream disconnected: {self.transport.getPeer()} {reason.value}')
-        self.factory.feeder_factory.del_ds_client(self)
+        self.factory.feeder_factory.unregisterClient(self)
 
     def dataReceived(self, data):
         log.debug(f'==> received {data} from downstream  {self.transport.getPeer()}')
@@ -330,12 +339,15 @@ class StateResource(Resource):
         upstreams += "</table>"
 
         tcp_clients = ""
-        for d in self.feeder_factory.downstream_clients:
-            tcp_clients += f"\t\t<tr><td>{d.transport.getPeer()}</td><td>{d.bbox}</td></tr>\n"
-
         ws_clients = ""
-        for w in self.feeder_factory.websocket_clients:
-            ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.user}</td><td>{w.forwarded_for}</td></tr>\n"
+
+        for client in self.feeder_factory.clients:
+            if isinstance(client, Downstream):
+                tcp_clients += f"\t\t<tr><td>{d.transport.getPeer()}</td><td>{d.bbox}</td></tr>\n"
+
+            if isinstance(client, WSServerProtocol):
+                ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.user}</td><td>{w.forwarded_for}</td></tr>\n"
+
 
         aircraft = """
 <H2>Aircraft observed</H2>
