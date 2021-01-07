@@ -1,9 +1,9 @@
 import jwt
+import os
 from datetime import datetime #timedelta, timezone,
 
 _audience = ["adsb-geobuf", "adsb-json"]
 _issuer = "urn:mah.priv.at"
-_secret = "testsecret"
 
 class JWTAuthenticator(object):
 
@@ -17,6 +17,9 @@ class JWTAuthenticator(object):
             self.jwt_secret = os.environ.get("JWT_SECRET")
         else:
             self.jwt_secret = jwt_secret
+        if not self.jwt_secret:
+	           raise Exception("jwt secret missing")
+
         self.jwt = None
         self.issuer = issuer
         self.algorithm = algorithm
@@ -47,8 +50,7 @@ class JWTAuthenticator(object):
 if __name__ == "__main__":
 
 
-    jwt_auth = JWTAuthenticator(jwt_secret=_secret,
-                                audience=_audience,
+    jwt_auth = JWTAuthenticator(audience=_audience,
                                 issuer=_issuer,
                                 algorithm="HS256")
 

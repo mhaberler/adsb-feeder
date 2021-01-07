@@ -60,7 +60,7 @@ import geobuf
 
 import observer
 import boundingbox
-from jwt import InvalidAudienceError, ExpiredSignatureError
+from jwt import InvalidAudienceError, ExpiredSignatureError, InvalidSignatureError, PyJWTError
 from jwtauth import *
 
 appName = "Feeder"
@@ -207,7 +207,7 @@ class WSServerProtocol(WebSocketServerProtocol):
                 break
 
         if not self.proto:
-            raise ConnectionDeny(ConnectionDeny.BAD_REQUEST, f"only these subprotocols spoken here: {self.factory._subprotocols}")
+            raise ConnectionDeny(ConnectionDeny.BAD_REQUEST)
 
         log.debug(f"chosen protocol {self.proto} for {self.forwarded_for} via {self.peer}")
 
@@ -225,18 +225,14 @@ class WSServerProtocol(WebSocketServerProtocol):
                         f"session expires in {close_in} seconds - {datetime.fromtimestamp(finish)}")
                     break
 
-            except InvalidAudienceError as e:
-                log.error(f"Invalid audience {e}")
-                raise ConnectionDeny(4712, "xxx")
+            except PyJWTError as e:
+                log.error(f"JWTError  {e}")
+                raise ConnectionDeny(1066)
 
-            except ExpiredSignatureError as e:
-                log.error(f"expired signature  {e}")
-                raise ConnectionDeny(4713, "yyy")
 
         else:
-            log.info(
-                f"closing as no token passed in URI by {self.forwarded_for} via {request.peer}")
-            raise ConnectionDeny(4715, u"no token passed in URI")
+            log.info(f"no token passed in URI by {self.forwarded_for} via {request.peer}")
+            raise ConnectionDeny(1066)
 
         # accept the WebSocket connection, speaking subprotocol `proto`
         # and setting HTTP headers `headers`
@@ -245,17 +241,8 @@ class WSServerProtocol(WebSocketServerProtocol):
 
     def sessionExpired(self):
         self.factory.feeder_factory.unregisterClient(self)
-        log.debug(
-            f"session timeout, closing {self.forwarded_for} via {self.peer}")
-        self.sendClose(code=4714, reason="token validity time exceeded")
-
-    def authTimeout(self):
-        if not self.usr:
-            # nothing was sent in time
-            log.error(f"authentication timeout, disconnecting")
-            self.sendClose(
-                code=4711, reason="timed out waiting for credentials")
-        # else we're good, some valid token was sent in between
+        log.debug(f"token validity time exceeded, closing {self.forwarded_for} via {self.peer}")
+        self.sendClose()
 
     def onOpen(self):
         log.debug(f"connection open to {self.forwarded_for} via {self.peer}")
@@ -515,8 +502,7 @@ def main():
     setup_logging(level, facility, appName)
     observer.log = log
     boundingbox.log = log
-    jwt_authenticator = JWTAuthenticator(jwt_secret="testsecret",
-                                         issuer="urn:mah.priv.at",
+    jwt_authenticator = JWTAuthenticator(issuer="urn:mah.priv.at",
                                          audience=WSServerFactory._subprotocols,
                                          algorithm="HS256")
 
