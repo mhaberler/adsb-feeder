@@ -178,22 +178,13 @@ def client_updater(flight_observer, feeder_factory):
         o.resetUpdated()
 
 
-class AuthenticationError(Exception):
-    def __init__(self, value):
-        self.value = value
-
-    def __str__(self):
-        return(repr(self.value))
-
-
 class WSServerProtocol(WebSocketServerProtocol):
 
     def onConnecting(self, transport_details):
         logging.info(f"WebSocket connecting: {transport_details}")
 
     def onConnect(self, request):
-        log.debug(
-            f"Client connecting: {request.peer} version {request.version}")
+        log.debug(f"Client connecting: {request.peer} version {request.version}")
         log.debug(f"headers: {request.headers}")
         log.debug(f"path: {request.path}")
         log.debug(f"params: {request.params}")
@@ -208,16 +199,23 @@ class WSServerProtocol(WebSocketServerProtocol):
         self.forwarded_for = request.headers.get('x-forwarded-for', '')
         self.host = request.headers.get('host', '')
 
-        protos = [p for p in self.factory._subprotocols if p in request.protocols]
-        if not protos:
+        proto = None
+        # server-side preference of subprotocol
+        for p in self.factory._subprotocols:
+            if p in request.protocols:
+                self.proto = p
+                break
+
+        if not self.proto:
             raise ConnectionDeny(ConnectionDeny.BAD_REQUEST, f"only these subprotocols spoken here: {self.factory._subprotocols}")
-        self.proto = protos[0]
+
         log.debug(f"chosen protocol {self.proto} for {self.forwarded_for} via {self.peer}")
 
         if 'token' in request.params:
             try:
                 for token in request.params['token']:
                     obj = self.factory.jwt_auth.decodeToken(token)
+                    log.debug(f"token={obj} from {self.forwarded_for}")
                     self.usr = obj['usr']
                     finish = min(datetime.utcnow().timestamp() +
                                  obj['dur'], obj['exp'])
@@ -228,12 +226,12 @@ class WSServerProtocol(WebSocketServerProtocol):
                     break
 
             except InvalidAudienceError as e:
-                log.error(f"Invalid audience: {obj}")
-                raise ConnectionDeny(4712, e)
+                log.error(f"Invalid audience {e}")
+                raise ConnectionDeny(4712, "xxx")
 
             except ExpiredSignatureError as e:
-                log.error(f"expired signature: {obj}")
-                raise ConnectionDeny(4713, e)
+                log.error(f"expired signature  {e}")
+                raise ConnectionDeny(4713, "yyy")
 
         else:
             log.info(
@@ -287,7 +285,7 @@ class WSServerProtocol(WebSocketServerProtocol):
 class WSServerFactory(WebSocketServerFactory):
 
     protocol = WSServerProtocol
-    _subprotocols = ['adsb-json', 'adsb-geobuf']
+    _subprotocols = ['adsb-geobuf', 'adsb-json']
 
 
 class Downstream(Protocol):
@@ -388,10 +386,10 @@ class StateResource(Resource):
 
         for client in self.feeder_factory.clients:
             if isinstance(client, Downstream):
-                tcp_clients += f"\t\t<tr><td>{d.transport.getPeer()}</td><td>{d.bbox}</td></tr>\n"
+                tcp_clients += f"\t\t<tr><td>{client.transport.getPeer()}</td><td>{client.bbox}</td></tr>\n"
 
             if isinstance(client, WSServerProtocol):
-                ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.usr}</td><td>{w.forwarded_for}</td></tr>\n"
+                ws_clients += f"\t\t<tr><td>{client.peer}</td><td>{client.bbox}</td><td>{client.usr}</td><td>{client.forwarded_for}</td></tr>\n"
 
         aircraft = """
 <H2>Aircraft observed</H2>
@@ -519,7 +517,7 @@ def main():
     boundingbox.log = log
     jwt_authenticator = JWTAuthenticator(jwt_secret="testsecret",
                                          issuer="urn:mah.priv.at",
-                                         audience="adsb",
+                                         audience=WSServerFactory._subprotocols,
                                          algorithm="HS256")
 
     bbox_validator = boundingbox.BBoxValidator()
