@@ -3,7 +3,7 @@
 
 <head>
 
-  <title>Leaflet ADSB-Feeder demo</title>
+  <title>ADSB-Feeder Example - Geobuf</title>
 
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,20 +12,23 @@
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" integrity="sha512-xodZBNTC5n17Xt2atTPuE1HxjVMSvLVW9ocqUKLsCC5CXdbqCmblAshOMAS6/keqq/sMZMZ19scR4PsZChSR7A==" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" integrity="sha512-XQoYMqMTK8LvdxXYG3nZ448hOEQiglfqkJs1NOQV44cWnUrBc8PkAOcXy20w0vlaXaVUearIOBhiXZ5V3ynxwA==" crossorigin=""></script>
+  <script src="https://unpkg.com/geobuf@3.0.2/dist/geobuf.js" crossorigin=""></script>
+  <script src="https://unpkg.com/pbf@3.0.5/dist/pbf.js" crossorigin=""></script>
 
 </head>
 
 <body>
-
   <div id="mapid" style="width: 600px; height: 400px;"></div>
+  <div id="log" style="width: 600px; height: 100px;"></div>
+
   <script>
 
-    // adapt as needed
-    var wssUri = "wss://<user>:<password>p@<host>/adsb/"
+    var wssUri = "wss://data.mah.priv.at/adsb/?token="
+    // this token will permit 300 seconds of streaming updates, then disconnect
+    var token =  'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c3IiOiJnaXRodWIiLCJkdXIiOjMwMCwiZXhwIjoxNjU0MDQxNjAwLjAsImlzcyI6InVybjptYWgucHJpdi5hdCIsImF1ZCI6WyJhZHNiLWdlb2J1ZiIsImFkc2ItanNvbiJdLCJpYXQiOjE2MTAwNDY2ODMsInJ1aSI6MzB9.umKZ6rfTKTZe3gvxPrLZlXpO8eIzL82dO0PAj6MBnAM';
 
     var center = [47, 15];
     var initialZoom = 8;
-
 
     var map = L.map('mapid').setView(center, initialZoom);
 
@@ -40,80 +43,173 @@
 
     var markers = {};
 
-    // establish websocket connection
-    var ws = new WebSocket(wssUri);
-
-    ws.onopen = function() {
-      console.log("Opened");
-      // send an inital bbox update
-      updateBBox();
-    };
-
-    ws.onclose = function() {
-      console.log("Closed");
-    };
-
-    ws.onmessage = function(event) {
-      feature = JSON.parse(event.data);
-      // feature comes in as:
-      //
-      // {
-      //   "type": "Feature",
-      //   "geometry": {
-      //     "type": "Point",
-      //     "coordinates": [15.79151, 46.70595, 34000]
-      //   },
-      //   "properties": {
-      //     "icao24": "4BB264",
-      //     "callsign": "THY3UL",
-      //     "squawk": "3273",
-      //     "time": 1609858269.40257,
-      //     "speed": 447.0,
-      //     "vspeed": 352,
-      //     "heading": 289.0
-      //   }
-      // }
-      if (feature.geometry.type == "Point") {
-        let icao = feature.properties.icao24;
-        let lat = feature.geometry.coordinates[1];
-        let lon = feature.geometry.coordinates[0];
-        let alt = feature.geometry.coordinates[2];
-        if (markers[icao] == undefined) {
-          // first seen this plane
-          m = L.marker([lat, lon]).addTo(map);
-          m.bindPopup(icao)
-          m.on('click', function(e) {
-            let f = e.sourceTarget;
-            console.log('Marker clicked on', f);
-
-            var popup = e.target.getPopup();
-            popup.setContent(f.properties.icao24 + " " + f.altitude);
-          });
-          markers[icao] = m;
+    // my crappy logger :-/
+    (function() {
+      var count = 1;
+      var old = console.log;
+      var logger = document.getElementById('log');
+      console.log = function(message) {
+        if (typeof message == 'object') {
+          logger.innerHTML = count + " " + (JSON && JSON.stringify ? JSON.stringify(message) : message) + '<br />';
         } else {
-          // already seen, just move it
-          m = markers[icao];
-          m.setLatLng([lat, lon]);
+          logger.innerHTML = count + " " + message + '<br />';
         }
-        markers[icao].properties = feature.properties;
-        markers[icao].altitude = alt;
+        count = count + 1;
       }
+    })();
+
+
+    // websocket status codes: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent#Status_codes
+    // lifted from https://stackoverflow.com/questions/19304157/getting-the-reason-why-websockets-closed-with-close-code-1006
+    let specificStatusCodeMappings = {
+      '1000': 'Normal Closure',
+      '1001': 'Going Away',
+      '1002': 'Protocol Error',
+      '1003': 'Unsupported Data',
+      '1004': '(For future)',
+      '1005': 'No Status Received',
+      '1006': 'Abnormal Closure',
+      '1007': 'Invalid frame payload data',
+      '1008': 'Policy Violation',
+      '1009': 'Message too big',
+      '1010': 'Missing Extension',
+      '1011': 'Internal Error',
+      '1012': 'Service Restart',
+      '1013': 'Try Again Later',
+      '1014': 'Bad Gateway',
+      '1015': 'TLS Handshake'
     };
 
-    // dynamically send a bounding box update to the server
-    function updateBBox() {
-      let b = map.getBounds();
-      let bbox = {}
-      bbox["min_latitude"] = b.getSouth();
-      bbox["max_latitude"] = b.getNorth();
-      bbox["min_longitude"] = b.getWest();
-      bbox["max_longitude"] = b.getEast();
-
-      console.log("updating bbox:", bbox);
-      ws.send(JSON.stringify(bbox));
+    function getStatusCodeString(code) {
+      if (code >= 0 && code <= 999) {
+        return '(Unused)';
+      } else if (code >= 1016) {
+        if (code <= 1999) {
+          return '(For WebSocket standard)';
+        } else if (code <= 2999) {
+          return '(For WebSocket extensions)';
+        } else if (code <= 3999) {
+          return '(For libraries and frameworks)';
+        } else if (code <= 4999) {
+          return '(For applications)';
+        }
+      }
+      if (typeof(specificStatusCodeMappings[code]) !== 'undefined') {
+        return specificStatusCodeMappings[code];
+      }
+      return '(Unknown)';
     }
-    map.on('moveend zoomend resetview', updateBBox);
 
+    // adaptive reconnection timer
+    var timeout = 250;
+    var maxTime = 10000;
+
+    function connect() {
+      // announce we can handle both subprotocols
+      // normally one would just use: 'adsb-geobuf'
+      conn = new WebSocket(wssUri + token, ['adsb-geobuf', 'adsb-json']);
+      conn.binaryType = "arraybuffer";
+
+      conn.onclose = function(evt) {
+        var errmsg = getStatusCodeString(evt.code);
+        console.log("offline: code=" + evt.code + ", " + errmsg + ", reconnecting in " + timeout + " mS");
+
+        setTimeout(function() {
+          connect();
+          // quadratic backoff: 250,500,1000,2000,4000,8000,10000,10000 mS
+        }, Math.min(10000, timeout += timeout));
+      };
+
+      // dynamically send a bounding box update to the server
+      updateBBox = function() {
+        let b = map.getBounds();
+        let bbox = {}
+        bbox["min_latitude"] = b.getSouth();
+        bbox["max_latitude"] = b.getNorth();
+        bbox["min_longitude"] = b.getWest();
+        bbox["max_longitude"] = b.getEast();
+
+        console.log("updating bbox: <br />" + JSON.stringify(bbox, null, 2));
+        conn.send(JSON.stringify(bbox));
+      }
+
+      map.on('moveend zoomend resetview', updateBBox);
+
+      conn.onopen = function() {
+        timeout = 250;
+        console.log("WS opened, chosen subprotocol: " + conn.protocol);
+        // send an inital bbox update
+        updateBBox();
+      };
+      // as served by adsb-feeder:
+      // {
+      //         'type': 'Feature',
+      //         'properties':    {
+      //             "i": self.__icao24,
+      //             "c": self.__callsign,
+      //             "s": self.__squawk,
+      //             "t": self.__altitudeTime.timestamp(),
+      //             "v": self.__groundSpeed,
+      //             "r": self.__verticalRate,
+      //             "h": self.__track,
+      //             "a": self.__altitude
+      //         },
+      //         'geometry': {
+      //             'type': 'Point',
+      //             'coordinates': (self.__lon, self.__lat)
+      //         }
+      //     }
+      conn.onmessage = function(msg) {
+        var feature;
+        // just showing both decoding methods
+        if (conn.protocol == 'adsb-geobuf') {
+          if (msg.data instanceof ArrayBuffer) {
+            feature = geobuf.decode(new Pbf(new Uint8Array(msg.data)));
+          } else {
+            console.log("hm, received a non-ArrayBuffer? " +
+              JSON.stringify(msg.data, null, 2));
+          }
+        }
+        if (conn.protocol == 'adsb-json') {
+          feature = JSON.parse(event.data);
+        }
+        if (feature.geometry.type == "Point") {
+          let icao = feature.properties.i;
+          let lat = feature.geometry.coordinates[1];
+          let lon = feature.geometry.coordinates[0];
+          if (markers[icao] == undefined) {
+            // first seen this plane
+            m = L.marker([lat, lon]).addTo(map);
+            m.bindPopup(icao)
+            m.on('click', function(e) {
+              let f = e.sourceTarget.properties;
+              console.log(f);
+
+              var popup = e.target.getPopup();
+              popup.setContent(f.i + " " + f.a + " " + f.c);
+            });
+            markers[icao] = m;
+          } else {
+            // already seen, just move it
+            m = markers[icao];
+            m.setLatLng([lat, lon]);
+          }
+          markers[icao].properties = feature.properties;
+        }
+      };
+
+      conn.onerror = function(e) {
+        console.log("WebSocket Error: ", e);
+      }
+
+      window.onbeforeunload = function() {
+        conn.close();
+      };
+    }
+
+    window.onload = function() {
+      connect();
+    };
   </script>
 
 </body>
