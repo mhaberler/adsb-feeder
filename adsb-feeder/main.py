@@ -44,6 +44,7 @@ from autobahn.twisted.websocket import WebSocketServerFactory, \
 from autobahn.websocket.types import ConnectionDeny
 
 import sys
+import os
 import logging
 import logging.handlers
 import syslog
@@ -51,29 +52,36 @@ import jsonschema
 
 import orjson
 import argparse
-import datetime
+from datetime import datetime, timedelta, timezone
 import base64
 from collections import Counter
 import geojson
 import geobuf
-import jwt
-
 
 import observer
 import boundingbox
+from jwt import InvalidAudienceError, ExpiredSignatureError
+from jwtauth import *
 
 appName = "Feeder"
 facility = syslog.LOG_LOCAL1
 
 
 def within(lat, lon, alt, bbox):
-    if lat < bbox.min_latitude: return False
-    if lat > bbox.max_latitude: return False
-    if lon < bbox.min_longitude: return False
-    if lon > bbox.max_longitude: return False
-    if alt < bbox.min_altitude: return False
-    if alt > bbox.max_altitude: return False
+    if lat < bbox.min_latitude:
+        return False
+    if lat > bbox.max_latitude:
+        return False
+    if lon < bbox.min_longitude:
+        return False
+    if lon > bbox.max_longitude:
+        return False
+    if alt < bbox.min_altitude:
+        return False
+    if alt > bbox.max_altitude:
+        return False
     return True
+
 
 class UpstreamProtocol(basic.LineOnlyReceiver):
     delimiter = b'\n'
@@ -106,7 +114,6 @@ class UpstreamFactory(ReconnectingClientFactory):
     maxDelay = 30
     upstreams = set()
 
-
     def __init__(self, flight_observer, permanent, parent):
         self.clients = set()
         self.flight_observer = flight_observer
@@ -126,13 +133,12 @@ class UpstreamFactory(ReconnectingClientFactory):
             self.parent.stopService()
 
     def registerClient(self, client):
-        log.debug(f"WS client type: {type(client)}")
-        log.debug(f"DS {isinstance(client, Downstream)}")
-        log.debug(f"WS {isinstance(client, WSServerProtocol)}")
+        log.debug(f"registerClient {type(client)}")
         self.clients.add(client)
         self.client_added()
 
     def unregisterClient(self, client):
+        log.debug(f"unregisterClient {type(client)}")
         self.clients.discard(client)
         self.client_removed()
 
@@ -163,68 +169,101 @@ def client_updater(flight_observer, feeder_factory):
                 if isinstance(client, Downstream):
                     client.transport.write(r)
                 if isinstance(client, WSServerProtocol):
-                    if not client.authenticated_user:
+                    if not client.usr:
                         continue
-                    if client.geobuf:
+                    if client.proto == 'adsb-geobuf':
                         client.sendMessage(pbf, True)
-                    else:
+                    if client.proto == 'adsb-json':
                         client.sendMessage(r, False)
         o.resetUpdated()
 
 
+class AuthenticationError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return(repr(self.value))
+
+
 class WSServerProtocol(WebSocketServerProtocol):
 
+    def onConnecting(self, transport_details):
+        logging.info(f"WebSocket connecting: {transport_details}")
 
     def onConnect(self, request):
-        log.debug(f"Client connecting: {request.peer} version {request.version}")
+        log.debug(
+            f"Client connecting: {request.peer} version {request.version}")
         log.debug(f"headers: {request.headers}")
         log.debug(f"path: {request.path}")
         log.debug(f"params: {request.params}")
         log.debug(f"protocols: {request.protocols}")
         log.debug(f"extensions: {request.extensions}")
         self.peer = request.peer
-        self.authenticated_user = None # until after jwt decoded
+        self.usr = None  # until after jwt decoded
+
         self.bbox = boundingbox.BoundingBox()
         self.bbox.fromParams(request.params)
         self.geobuf = 'options' in request.params and 'geobuf' in request.params['options']
+        self.forwarded_for = request.headers.get('x-forwarded-for', '')
+        self.host = request.headers.get('host', '')
 
-        # if 'authorization' not in request.headers:
-        #     raise ConnectionDeny( 4000, u'Missing authorization')
+        protos = [p for p in self.factory._subprotocols if p in request.protocols]
+        if not protos:
+            raise ConnectionDeny(ConnectionDeny.BAD_REQUEST, f"only these subprotocols spoken here: {self.factory._subprotocols}")
+        self.proto = protos[0]
+        log.debug(f"chosen protocol {self.proto} for {self.forwarded_for} via {self.peer}")
 
-        self.forwarded_for = request.headers.get('x-forwarded-for','')
-        self.host = request.headers.get('host','')
-        log.debug(f"forwarded for: {self.forwarded_for} host={self.host}")
+        if 'token' in request.params:
+            try:
+                for token in request.params['token']:
+                    obj = self.factory.jwt_auth.decodeToken(token)
+                    self.usr = obj['usr']
+                    finish = min(datetime.utcnow().timestamp() +
+                                 obj['dur'], obj['exp'])
+                    close_in = round(finish - datetime.utcnow().timestamp())
+                    reactor.callLater(int(close_in), self.sessionExpired)
+                    log.debug(
+                        f"session expires in {close_in} seconds - {datetime.fromtimestamp(finish)}")
+                    break
 
-        # authheader = request.headers['authorization']
-        # log.debug(f"authheader {authheader}")
-        # elements = authheader.split(" ")
-        # if elements[0].lower() == 'basic':
-        #     user, _ = base64.b64decode(elements[1]).split(b":")
-        #     self.user = user.decode("utf8")
-        #     log.debug(f"user {self.user}")
-        # else:
-        #     raise ConnectionDeny(4001, u'basic authorization required')
+            except InvalidAudienceError as e:
+                log.error(f"Invalid audience: {obj}")
+                raise ConnectionDeny(4712, e)
+
+            except ExpiredSignatureError as e:
+                log.error(f"expired signature: {obj}")
+                raise ConnectionDeny(4713, e)
+
+        else:
+            log.info(
+                f"closing as no token passed in URI by {self.forwarded_for} via {request.peer}")
+            raise ConnectionDeny(4715, u"no token passed in URI")
+
+        # accept the WebSocket connection, speaking subprotocol `proto`
+        # and setting HTTP headers `headers`
+        # return (proto, headers)
+        return self.proto
+
+    def sessionExpired(self):
+        self.factory.feeder_factory.unregisterClient(self)
+        log.debug(
+            f"session timeout, closing {self.forwarded_for} via {self.peer}")
+        self.sendClose(code=4714, reason="token validity time exceeded")
 
     def authTimeout(self):
-        log.debug(f"ip={self.forwarded_for} host={self.host}: authentication timeout, disconnecting")
-        self.sendClose(code=4711, reason="timed out waiting for credentials")
-
+        if not self.usr:
+            # nothing was sent in time
+            log.error(f"authentication timeout, disconnecting")
+            self.sendClose(
+                code=4711, reason="timed out waiting for credentials")
+        # else we're good, some valid token was sent in between
 
     def onOpen(self):
-        log.debug(f"WebSocket connection open.")
-        # start timer
-        self.auth_future = reactor.callLater(3, self.authTimeout)
+        log.debug(f"connection open to {self.forwarded_for} via {self.peer}")
         self.factory.feeder_factory.registerClient(self)
 
     def onMessage(self, payload, isBinary):
-#
-# parse json
-# check for auth
-# check expiration
-#
-# cancel self.auth_future
-# set user etc
-
         if isBinary:
             log.debug(f"Binary message received: {len(payload)} bytes")
         else:
@@ -233,19 +272,23 @@ class WSServerProtocol(WebSocketServerProtocol):
         (success, bbox, response) = self.factory.bbox_validator.validate_str(payload)
         if not success:
             log.info(f'{self.peer} bbox update failed: {response}')
-            self.sendMessage(orjson.dumps(response, option=orjson.OPT_APPEND_NEWLINE), isBinary)
+            self.sendMessage(orjson.dumps(
+                response, option=orjson.OPT_APPEND_NEWLINE), isBinary)
         else:
             log.debug(f'{self.peer} updated bbox: {bbox}')
             self.bbox = bbox
 
-
     def onClose(self, wasClean, code, reason):
-        log.debug(f"WebSocket connection closed by {self.peer}: wasClean={wasClean} code={code} reason={reason}")
+        log.debug(
+            f"WebSocket connection closed by {self.forwarded_for} via {self.peer}: wasClean={wasClean} code={code} reason={reason}")
         self.factory.feeder_factory.unregisterClient(self)
+
 
 class WSServerFactory(WebSocketServerFactory):
 
     protocol = WSServerProtocol
+    _subprotocols = ['adsb-json', 'adsb-geobuf']
+
 
 class Downstream(Protocol):
 
@@ -263,13 +306,15 @@ class Downstream(Protocol):
         self.factory.feeder_factory.unregisterClient(self)
 
     def dataReceived(self, data):
-        log.debug(f'==> received {data} from downstream  {self.transport.getPeer()}')
+        log.debug(
+            f'==> received {data} from downstream  {self.transport.getPeer()}')
         (success, bbox, response) = self.factory.bbox_validator.validate_str(data)
         if not success:
             self.transport.write(json.dumps(response).encode("utf8"))
         else:
             log.debug(f'{self.transport.getPeer()} updated bbox: {bbox}')
             self.bbox = bbox
+
 
 class DownstreamFactory(Factory):
 
@@ -308,7 +353,7 @@ def setup_logging(level, facility, appName):
 
 class StateResource(Resource):
 
-    def __init__(self, flight_observer,feeder_factory,
+    def __init__(self, flight_observer, feeder_factory,
                  downstream_factory, websocket_factory):
         self.observer = flight_observer
         self.feeder_factory = feeder_factory
@@ -320,7 +365,7 @@ class StateResource(Resource):
         rates, distribution, observations, span = self.observer.stats()
         request.setHeader("Content-Type", "text/html; charset=utf-8")
         distribution_table = ""
-        for k,v in distribution:
+        for k, v in distribution:
             distribution_table += f"\t\t<tr><td>{k}</td><td>{v}%</td></tr>\n"
 
         upstreams = """
@@ -346,8 +391,7 @@ class StateResource(Resource):
                 tcp_clients += f"\t\t<tr><td>{d.transport.getPeer()}</td><td>{d.bbox}</td></tr>\n"
 
             if isinstance(client, WSServerProtocol):
-                ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.user}</td><td>{w.forwarded_for}</td></tr>\n"
-
+                ws_clients += f"\t\t<tr><td>{w.peer}</td><td>{w.bbox}</td><td>{w.usr}</td><td>{w.forwarded_for}</td></tr>\n"
 
         aircraft = """
 <H2>Aircraft observed</H2>
@@ -363,13 +407,13 @@ class StateResource(Resource):
     <th>vspeed</th>
     <th>heading</th>
 </tr>"""
-        for icao,o in observations.items():
+        for icao, o in observations.items():
             #log.debug(f'icao={icao} o={o}')
             if not o.isPresentable():
                 continue
             d = o.as_dict()
             aircraft += "<tr>"
-            for k in ["icao24","callsign", "squawk", "lat","lon","altitude","speed","vspeed","heading"]:
+            for k in ["icao24", "callsign", "squawk", "lat", "lon", "altitude", "speed", "vspeed", "heading"]:
                 aircraft += f'<td>{d[k]}</td>'
             aircraft += "</tr>"
         aircraft += "</table>"
@@ -378,7 +422,7 @@ class StateResource(Resource):
 <HTML>
     <HEAD><TITLE>ADS-B feed statistics</title></head>
     <BODY>
-    <H1>ADS-B feed statistics as of {datetime.datetime.today()}</H1>
+    <H1>ADS-B feed statistics as of {datetime.today()}</H1>
     <H2>observation statistics (last {span} seconds)</H2>
     <table>
     <tr>
@@ -409,15 +453,17 @@ class StateResource(Resource):
 </html>"""
         return response.encode('utf-8')
 
+
 def str2bool(v):
     if isinstance(v, bool):
-       return v
+        return v
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
         return True
     elif v.lower() in ('no', 'false', 'f', 'n', '0'):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -458,9 +504,9 @@ def main():
 
     parser.add_argument('-l', '--log',
                         help="set the logging level. Arguments:  DEBUG, INFO, WARNING, ERROR, CRITICAL",
-                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        choices=['DEBUG', 'INFO',
+                                 'WARNING', 'ERROR', 'CRITICAL'],
                         dest="logLevel")
-
 
     args = parser.parse_args()
 
@@ -471,13 +517,18 @@ def main():
     setup_logging(level, facility, appName)
     observer.log = log
     boundingbox.log = log
+    jwt_authenticator = JWTAuthenticator(jwt_secret="testsecret",
+                                         issuer="urn:mah.priv.at",
+                                         audience="adsb",
+                                         algorithm="HS256")
 
-    bbox_validator  = boundingbox.BBoxValidator()
+    bbox_validator = boundingbox.BBoxValidator()
     websocket_factory = None
 
     if args.websocket:
         websocket_factory = WSServerFactory(args.websocket)
         websocket_factory.bbox_validator = bbox_validator
+        websocket_factory.jwt_auth = jwt_authenticator
 
     downstream_factory = None
     if args.downstream:
@@ -509,15 +560,13 @@ def main():
 
     if args.reporter:
         root = Resource()
-        root.putChild(b"", StateResource(flight_observer,feeder_factory,
+        root.putChild(b"", StateResource(flight_observer, feeder_factory,
                                          downstream_factory, websocket_factory))
         webserver = serverFromString(reactor, args.reporter).listen(Site(root))
-
 
     lc = LoopingCall(client_updater,
                      flight_observer, feeder_factory)
     lc.start(0.3)
-
 
     reactor.run()
 
