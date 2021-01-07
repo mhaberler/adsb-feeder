@@ -1,7 +1,7 @@
 import jwt
 from datetime import datetime #timedelta, timezone,
 
-_audience = ["adsb-json", "adsb-geobuf"]
+_audience = ["adsb-geobuf", "adsb-json"]
 _issuer = "urn:mah.priv.at"
 _secret = "testsecret"
 
@@ -52,10 +52,10 @@ if __name__ == "__main__":
                                 issuer=_issuer,
                                 algorithm="HS256")
 
-    token = jwt_auth.genToken(user="karl",
-                            expiresIn=10,
+    token = jwt_auth.genToken(user="github",
+                            expiresIn=300,
                             reuseIn=30,
-                            expiresOn="2022-01-10 00:00:00 +0000")
+                            expiresOn="2022-06-01 00:00:00 +0000")
 
     print("encoded token:",  token)
     decoded = jwt_auth.decodeToken(token)
