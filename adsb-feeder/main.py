@@ -493,6 +493,13 @@ def main():
                                  'WARNING', 'ERROR', 'CRITICAL'],
                         dest="logLevel")
 
+    parser.add_argument('-D', '--debug-parser',
+                        help="debug the inner loop - lots of log output!",
+                        nargs='?',
+                        const=True,
+                        default=False,
+                        dest="debugParser")
+
     args = parser.parse_args()
 
     level = logging.WARNING
@@ -500,6 +507,8 @@ def main():
         level = getattr(logging, args.logLevel)
 
     setup_logging(level, facility, appName)
+
+    observer.trace_parser = args.debugParser
     observer.log = log
     boundingbox.log = log
     jwt_authenticator = JWTAuthenticator(issuer="urn:mah.priv.at",

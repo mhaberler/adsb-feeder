@@ -39,6 +39,7 @@ import geojson
 OBSERVATION_CLEAN_INTERVAL = 30
 
 log = None
+trace_parser = False
 
 # http://stackoverflow.com/questions/1165352/fast-comparison-between-two-python-dictionary
 
@@ -120,7 +121,8 @@ class Observation(object):
         return f" icao {self.__icao24} logged {self.__loggedDate} alt {self.__altitude} lat {self.__lat} lon {self.__lon} speed {self.__groundSpeed} track {self.__track}"
 
     def __init__(self, sbs1msg, now):
-        log.debug("%s appeared" % sbs1msg["icao24"])
+        if trace_parser:
+            log.debug("%s appeared" % sbs1msg["icao24"])
         self.__icao24 = sbs1msg["icao24"]
         self.__flightID = sbs1msg["flightID"]
         self.__squawk = sbs1msg["squawk"]
@@ -347,10 +349,12 @@ class FlightObserver(object):
         if now > self.__next_clean:
             cleaned = []
             for icao24 in self.__observations:
-                log.debug("[%s] %s -> %s : %s" % (icao24, self.__observations[icao24].getLoggedDate(
-                ), self.__observations[icao24].getLoggedDate() + timedelta(seconds=OBSERVATION_CLEAN_INTERVAL), now))
+                if trace_parser:
+                    log.debug("[%s] %s -> %s : %s" % (icao24, self.__observations[icao24].getLoggedDate(
+                    ), self.__observations[icao24].getLoggedDate() + timedelta(seconds=OBSERVATION_CLEAN_INTERVAL), now))
                 if self.__observations[icao24].getLoggedDate() + timedelta(seconds=OBSERVATION_CLEAN_INTERVAL) < now:
-                    log.debug("%s disappeared" % (icao24))
+                    if trace_parser:
+                        log.debug("%s disappeared" % (icao24))
                     cleaned.append(icao24)
 
             for icao24 in cleaned:
