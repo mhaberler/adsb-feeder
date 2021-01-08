@@ -32,9 +32,9 @@ from twisted.internet.protocol import ReconnectingClientFactory, Protocol, Facto
 from twisted.protocols import basic
 from twisted.internet.endpoints import clientFromString, serverFromString
 from twisted.internet.task import LoopingCall
-from twisted.application.internet import ClientService
+from twisted.application.internet import ClientService, backoffPolicy
 from twisted.application import internet, service
-from twisted.python.log import PythonLoggingObserver, ILogObserver
+from twisted.python.log import PythonLoggingObserver, ILogObserver, startLogging #WithObserver
 from twisted.web.server import Site
 from twisted.web.resource import Resource
 
@@ -84,70 +84,52 @@ def within(lat, lon, alt, bbox):
 
 
 class UpstreamProtocol(basic.LineOnlyReceiver):
-    delimiter = b'\n'
 
-    def __init__(self, factory):
-        self.factory = factory
-        self.feedstats = Counter(connects=0, lines=0)
+    def __init__(self):
+        self.feedstats = Counter(bytes=0, lines=0)
 
     def connectionMade(self):
         log.debug(f'[x] upstream connection established to'
                   f' {self.transport.getPeer()}')
-        self.feedstats['connects'] += 1
         self.factory.upstreams.add(self)
+        self.factory.countConnect(self.transport.getPeer().host)
 
     def connectionLost(self, reason):
         log.debug(f'[ ] upstream connection to {self.transport.getPeer()}lost:'
-                     f' {reason.value} current delay={self.factory.delay}')
-        #og.error(f"Connection with the broker failed: {reason} ")
-        #ReconnectingClientFactory.clientConnectionFailed(self.factory, self.transport, reason)
+                     f' {reason.value}')
         self.factory.upstreams.discard(self)
 
     def lineReceived(self, line):
+        log.debug(f"{self.logPrefix()}: lineReceived {line}")
         self.feedstats['lines'] += 1
+        self.feedstats['bytes'] += len(line)
         # typeof(m) = Observation()
-        m = self.factory.flight_observer.parse(line.decode())
+        self.factory.flight_observer.parse(line.decode())
 
 
-class UpstreamFactory(ReconnectingClientFactory):
+class UpstreamFactory(Factory):
 
-    #protocol = UpstreamProtocol
-    # initialDelay = 1.0
-    # delay = 1.0
-    # factor = 2.7182818284590451
-    # jitter = 0.1196265647
-    # maxDelay = 300
     upstreams = set()
+    connects = dict()
 
-    def __init__(self, flight_observer, permanent, parent):
-        log.debug(f"UpstreamFactory.__init__")
-
+    def __init__(self, protocol, flight_observer, permanent, parent):
+        log.debug(f"{self.logPrefix()}")
+        self.protocol = protocol
         self.clients = set()
         self.flight_observer = flight_observer
         self.permanent = permanent
         self.parent = parent
-        self.initialDelay = 1.0
-        self.delay = 1.0
-        self.factor = 2.7182818284590451
-        self.jitter = 0.1196265647
-        self.maxDelay = 300
 
-    def buildProtocol(self, addr):
-        log.debug(f"Resetting reconnection delay for  {addr}")
-        self.resetDelay()
-        self.protocol = UpstreamProtocol(self)
-        return self.protocol
+    def countConnect(self, host):
+        if not host in self.connects:
+            self.connects[host] = Counter(connects=0)
+        self.connects[host]['connects'] += 1
 
-    def startedConnecting(self, connector):
-        log.info(f"started to connect with the feeder {connector} delay={self.delay}")
+    def kick(self):
+        self.parent.startService()
 
-    def clientConnectionLost(self, connector, reason):
-        log.info(f"Connection with the feeder {connector} lost: {reason}  delay={self.delay}")
-        ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
-
-    def clientConnectionFailed(self, connector, reason):
-        log.info(f"Connection with the feeder {connector} failed: {reason} delay={self.delay}")
-        ReconnectingClientFactory.clientConnectionFailed(self, connector, reason)
+    def kill(self):
+        self.parent.stopService()
 
     def registerClient(self, client):
         log.debug(f"registerClient {type(client)}")
@@ -158,7 +140,6 @@ class UpstreamFactory(ReconnectingClientFactory):
     def unregisterClient(self, client):
         log.debug(f"unregisterClient {type(client)}")
         self.clients.discard(client)
-        self.client_removed()
         if not self.permanent and len(self.clients) == 0:
             self.parent.stopService()
 
@@ -327,9 +308,12 @@ class DownstreamFactory(Factory):
 
 
 def setup_logging(level, facility, appName):
-    twisted_logging = PythonLoggingObserver('twisted')
-    twisted_logging.start()
-    logging.getLogger("twisted").setLevel(level)
+    ##twisted_logging = PythonLoggingObserver('twisted')
+    #twisted_logging.start()
+
+    #logging.getLogger("twisted").setLevel(level)
+
+    startLogging(sys.stdout) #twisted_logging)
 
     global log
     log = logging.getLogger(appName)
@@ -354,6 +338,13 @@ def setup_logging(level, facility, appName):
 
     log.addHandler(syslogHandler)
     log.addHandler(stderrHandler)
+    #startLoggingWithObserver(twisted_logging)
+
+def xxxsetup_logging(level, facility, appName):
+    global log
+    log = logging.getLogger(appName)
+    log.setLevel(level)
+    startLogging(sys.stdout) #twisted_logging)
 
 
 class StateResource(Resource):
@@ -528,6 +519,7 @@ def main():
 
     setup_logging(level, facility, appName)
 
+    log.debug("------------------")
     observer.trace_parser = args.debugParser
     observer.log = log
     boundingbox.log = log
@@ -552,11 +544,12 @@ def main():
     flight_observer = observer.FlightObserver()
 
     feeders = service.MultiService()
-    feeder_factory = UpstreamFactory(flight_observer, args.permanent, feeders)
+    retryPolicy = backoffPolicy(initialDelay=0.5, factor = 2.71828, maxDelay=20) #jitter = _goodEnoughRandom,)
+    feeder_factory = UpstreamFactory(UpstreamProtocol, flight_observer, args.permanent, feeders)
 
     for dest in args.upstreams:
         feeder_endpoint = clientFromString(reactor, dest)
-        feeder = ClientService(feeder_endpoint, feeder_factory)
+        feeder = ClientService(feeder_endpoint, feeder_factory, retryPolicy=retryPolicy)
         feeder.setServiceParent(feeders)
 
     if args.downstream:
@@ -569,7 +562,9 @@ def main():
         listenWS(websocket_factory)
 
     if args.permanent:
-        feeders.startService()
+        feeder_factory.kick()
+
+        #feeders.startService()
 
     if args.reporter:
         root = Resource()
