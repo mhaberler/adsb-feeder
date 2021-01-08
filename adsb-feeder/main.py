@@ -110,8 +110,10 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
 class UpstreamFactory(ReconnectingClientFactory):
 
     protocol = UpstreamProtocol
-    initialDelay = 2
-    maxDelay = 30
+    initialDelay = 1.0
+    factor = 2.7182818284590451
+    jitter = 0.1196265647
+    maxDelay = 300
     upstreams = set()
 
     def __init__(self, flight_observer, permanent, parent):
