@@ -68,7 +68,6 @@
       conn.binaryType = "arraybuffer";
 
       conn.onclose = function(evt) {
-        var errmsg = getStatusCodeString(evt.code);
         console.log("offline: code=" + evt.code + ", reconnecting in " + timeout + " mS");
         // quadratic backoff: 250,500,1000,2000,4000,8000,10000,10000 mS
         timeout += timeout;
