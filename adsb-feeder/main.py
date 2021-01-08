@@ -86,19 +86,21 @@ def within(lat, lon, alt, bbox):
 class UpstreamProtocol(basic.LineOnlyReceiver):
     delimiter = b'\n'
 
-    def __init__(self):
+    def __init__(self, factory):
+        self.factory = factory
         self.feedstats = Counter(connects=0, lines=0)
 
     def connectionMade(self):
         log.debug(f'[x] upstream connection established to'
                   f' {self.transport.getPeer()}')
         self.feedstats['connects'] += 1
-        self.factory.resetDelay()
         self.factory.upstreams.add(self)
 
     def connectionLost(self, reason):
         log.debug(f'[ ] upstream connection to {self.transport.getPeer()}lost:'
-                  f' {reason.value}')
+                     f' {reason.value} current delay={self.factory.delay}')
+        #og.error(f"Connection with the broker failed: {reason} ")
+        #ReconnectingClientFactory.clientConnectionFailed(self.factory, self.transport, reason)
         self.factory.upstreams.discard(self)
 
     def lineReceived(self, line):
@@ -109,40 +111,56 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
 
 class UpstreamFactory(ReconnectingClientFactory):
 
-    protocol = UpstreamProtocol
-    initialDelay = 1.0
-    factor = 2.7182818284590451
-    jitter = 0.1196265647
-    maxDelay = 300
+    #protocol = UpstreamProtocol
+    # initialDelay = 1.0
+    # delay = 1.0
+    # factor = 2.7182818284590451
+    # jitter = 0.1196265647
+    # maxDelay = 300
     upstreams = set()
 
     def __init__(self, flight_observer, permanent, parent):
+        log.debug(f"UpstreamFactory.__init__")
+
         self.clients = set()
         self.flight_observer = flight_observer
         self.permanent = permanent
         self.parent = parent
+        self.initialDelay = 1.0
+        self.delay = 1.0
+        self.factor = 2.7182818284590451
+        self.jitter = 0.1196265647
+        self.maxDelay = 300
 
-    def client_added(self):
-        if self.permanent:
-            return
-        if len(self.clients) == 1:
-            self.parent.startService()
+    def buildProtocol(self, addr):
+        log.debug(f"Resetting reconnection delay for  {addr}")
+        self.resetDelay()
+        self.protocol = UpstreamProtocol(self)
+        return self.protocol
 
-    def client_removed(self):
-        if self.permanent:
-            return
-        if len(self.clients) == 0:
-            self.parent.stopService()
+    def startedConnecting(self, connector):
+        log.info(f"started to connect with the feeder {connector} delay={self.delay}")
+
+    def clientConnectionLost(self, connector, reason):
+        log.info(f"Connection with the feeder {connector} lost: {reason}  delay={self.delay}")
+        ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
+
+    def clientConnectionFailed(self, connector, reason):
+        log.info(f"Connection with the feeder {connector} failed: {reason} delay={self.delay}")
+        ReconnectingClientFactory.clientConnectionFailed(self, connector, reason)
 
     def registerClient(self, client):
         log.debug(f"registerClient {type(client)}")
         self.clients.add(client)
-        self.client_added()
+        if not self.permanent and len(self.clients) == 1:
+            self.parent.startService()
 
     def unregisterClient(self, client):
         log.debug(f"unregisterClient {type(client)}")
         self.clients.discard(client)
         self.client_removed()
+        if not self.permanent and len(self.clients) == 0:
+            self.parent.stopService()
 
 
 def client_updater(flight_observer, feeder_factory):
