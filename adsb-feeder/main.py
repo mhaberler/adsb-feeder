@@ -168,13 +168,11 @@ class UpstreamClientFactory(Factory):
         self.connects[host]['connects'] += 1
 
     def registerClient(self, client):
-        log.debug(f"registerClient {type(client)}")
         self.clients.add(client)
         if not self.permanent and len(self.clients) == 1:
             self.parent.startService()
 
     def unregisterClient(self, client):
-        log.debug(f"unregisterClient {type(client)}")
         self.clients.discard(client)
         if not self.permanent and len(self.clients) == 0:
             self.parent.stopService()
