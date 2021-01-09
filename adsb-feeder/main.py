@@ -65,7 +65,7 @@ from jwtauth import *
 
 appName = "Feeder"
 facility = syslog.LOG_LOCAL1
-
+PING_EVERY = 30 # secs for now
 
 def within(lat, lon, alt, bbox):
     if lat < bbox.min_latitude:
@@ -177,6 +177,21 @@ class WSServerProtocol(WebSocketServerProtocol):
 
     def onConnecting(self, transport_details):
         logging.info(f"WebSocket connecting: {transport_details}")
+        self.last_heard = datetime.utcnow().timestamp()
+
+
+    def doPing(self):
+        if self.run:
+            self.sendPing()
+            #self.factory.pingsSent[self.peer] += 1
+            log.debug(f"Ping sent to {self.peer}")
+            reactor.callLater(PING_EVERY, self.doPing)
+
+    def onPong(self, payload):
+        #self.factory.pongsReceived[self.peer] += 1
+        self.last_heard = datetime.utcnow().timestamp()
+        log.debug(f"Pong received from {self.peer}")
+
 
     def onConnect(self, request):
         log.debug(f"Client connecting: {request.peer} version {request.version}")
@@ -243,7 +258,10 @@ class WSServerProtocol(WebSocketServerProtocol):
 
     def onOpen(self):
         log.debug(f"connection open to {self.forwarded_for} via {self.peer}")
+        self.run = True
         self.factory.feeder_factory.registerClient(self)
+        self.doPing()
+
 
     def onMessage(self, payload, isBinary):
         if isBinary:
@@ -263,6 +281,7 @@ class WSServerProtocol(WebSocketServerProtocol):
     def onClose(self, wasClean, code, reason):
         log.debug(
             f"WebSocket connection closed by {self.forwarded_for} via {self.peer}: wasClean={wasClean} code={code} reason={reason}")
+        self.run = False
         self.factory.feeder_factory.unregisterClient(self)
 
 
@@ -353,6 +372,7 @@ class StateResource(Resource):
         self.websocket_factory = websocket_factory
 
     def render_GET(self, request):
+        self.now = datetime.utcnow().timestamp()
         log.debug(f'render_GET request={request} args={request.args}')
         rates, distribution, observations, span = self.observer.stats()
         request.setHeader("Content-Type", "text/html; charset=utf-8")
@@ -390,8 +410,15 @@ class StateResource(Resource):
                 tcp_clients += f"\t\t<tr><td>{client.transport.getPeer()}</td><td>{client.bbox}</td></tr>\n"
 
             if isinstance(client, WSServerProtocol):
-                ws_clients += f"\t\t<tr><td>{client.peer}</td><td>{client.bbox}</td><td>{client.usr}</td><td>{client.forwarded_for}</td><td>{client.user_agent}</td></tr>\n"
-
+                ws_clients += (
+                    f"\t\t<tr><td>{client.peer}</td>"
+                    f"<td>{client.bbox}</td>"
+                    f"<td>{client.usr}</td>"
+                    f"<td>{client.forwarded_for}</td>"
+                    f"<td>{client.user_agent}</td></tr>\n"
+                    f"<td>{self.now - client.last_heard:.1f} s ago</td></tr>\n"
+                    f"</tr>\n"
+                )
         aircraft = """
 <H2>Aircraft observed</H2>
 <table>
