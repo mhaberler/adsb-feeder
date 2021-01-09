@@ -32,7 +32,7 @@ from twisted.internet.protocol import ReconnectingClientFactory, Protocol, Facto
 from twisted.protocols import basic
 from twisted.internet.endpoints import clientFromString, serverFromString
 from twisted.internet.task import LoopingCall
-from twisted.application.internet import ClientService, backoffPolicy
+from twisted.application.internet import ClientService, backoffPolicy, StreamServerEndpointService
 from twisted.application import internet, service
 from twisted.python.log import PythonLoggingObserver, ILogObserver, startLogging #WithObserver
 from twisted.web.server import Site
@@ -84,6 +84,7 @@ def within(lat, lon, alt, bbox):
 
 
 class UpstreamProtocol(basic.LineOnlyReceiver):
+    delimiter = b'\r\n'
 
     def __init__(self):
         self.feedstats = Counter(bytes=0, lines=0)
@@ -100,20 +101,18 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
         self.factory.upstreams.discard(self)
 
     def lineReceived(self, line):
-        log.debug(f"{self.logPrefix()}: lineReceived {line}")
+        #log.debug(f'[x] line {line} received from upstream  {self.transport.getPeer()}')
         self.feedstats['lines'] += 1
         self.feedstats['bytes'] += len(line)
-        # typeof(m) = Observation()
         self.factory.flight_observer.parse(line.decode())
 
 
-class UpstreamFactory(Factory):
+class UpstreamClientFactory(Factory):
 
     upstreams = set()
     connects = dict()
 
     def __init__(self, protocol, flight_observer, permanent, parent):
-        log.debug(f"{self.logPrefix()}")
         self.protocol = protocol
         self.clients = set()
         self.flight_observer = flight_observer
@@ -124,12 +123,6 @@ class UpstreamFactory(Factory):
         if not host in self.connects:
             self.connects[host] = Counter(connects=0)
         self.connects[host]['connects'] += 1
-
-    def kick(self):
-        self.parent.startService()
-
-    def kill(self):
-        self.parent.stopService()
 
     def registerClient(self, client):
         log.debug(f"registerClient {type(client)}")
@@ -200,7 +193,7 @@ class WSServerProtocol(WebSocketServerProtocol):
         self.forwarded_for = request.headers.get('x-forwarded-for', '')
         self.host = request.headers.get('host', '')
 
-        proto = None
+        self.proto = None
         # server-side preference of subprotocol
         for p in self.factory._subprotocols:
             if p in request.protocols:
@@ -470,15 +463,21 @@ def main():
                         dest='upstreams',
                         action='append',
                         type=str,
-                        required=True,
-                        help='upstream definition like tcp:1.2.3.4:30003')
+                        default=[],
+                        help='upstream outgoing connect definition like tcp:1.2.3.4:30003')
+
+    parser.add_argument('--upstream-server',
+                        dest='upstreamServer',
+                        action='store',
+                        type=str,
+                        help='upstream listen definition like tcp:30003:interface=192.168.1.1')
 
     parser.add_argument('--downstream',
                         dest='downstream',
                         action='store',
                         type=str,
                         default=None,
-                        help='downstream listen definition like tcp:1079')
+                        help='downstream listen definition like tcp:1079:interface=192.168.1.1')
 
     parser.add_argument('--websocket',
                         dest='websocket',
@@ -527,6 +526,8 @@ def main():
                                          audience=WSServerFactory._subprotocols,
                                          algorithm="HS256")
 
+    feeders = service.MultiService()
+
     bbox_validator = boundingbox.BBoxValidator()
     websocket_factory = None
 
@@ -534,6 +535,7 @@ def main():
         websocket_factory = WSServerFactory(args.websocket)
         websocket_factory.bbox_validator = bbox_validator
         websocket_factory.jwt_auth = jwt_authenticator
+
 
     downstream_factory = None
     if args.downstream:
@@ -543,10 +545,16 @@ def main():
 
     flight_observer = observer.FlightObserver()
 
-    feeders = service.MultiService()
-    retryPolicy = backoffPolicy(initialDelay=0.5, factor = 2.71828, maxDelay=20) #jitter = _goodEnoughRandom,)
-    feeder_factory = UpstreamFactory(UpstreamProtocol, flight_observer, args.permanent, feeders)
+    retryPolicy = backoffPolicy(initialDelay=0.5, factor = 2.71828, maxDelay=20)
 
+    upstream_server_factory = None
+    if args.upstreamServer:
+        upstream_server_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, True, feeders)
+        upstream_server_endpoint = serverFromString(reactor, args.upstreamServer)
+        feeder_server = StreamServerEndpointService(upstream_server_endpoint, upstream_server_factory)
+        feeder_server.setServiceParent(feeders)
+
+    feeder_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, args.permanent, feeders)
     for dest in args.upstreams:
         feeder_endpoint = clientFromString(reactor, dest)
         feeder = ClientService(feeder_endpoint, feeder_factory, retryPolicy=retryPolicy)
@@ -557,14 +565,14 @@ def main():
         downstream_factory.feeder_factory = feeder_factory
         downstream_server.listen(downstream_factory)
 
+#    if args.upstreamServer:
+
     if args.websocket:
         websocket_factory.feeder_factory = feeder_factory
         listenWS(websocket_factory)
 
     if args.permanent:
-        feeder_factory.kick()
-
-        #feeders.startService()
+        feeders.startService()
 
     if args.reporter:
         root = Resource()
