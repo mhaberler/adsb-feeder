@@ -34,7 +34,7 @@ from twisted.internet.endpoints import clientFromString, serverFromString
 from twisted.internet.task import LoopingCall
 from twisted.application.internet import ClientService, backoffPolicy, StreamServerEndpointService
 from twisted.application import internet, service
-from twisted.python.log import PythonLoggingObserver, ILogObserver, startLogging #WithObserver
+from twisted.python.log import PythonLoggingObserver, ILogObserver, startLogging, startLoggingWithObserver, addObserver
 from twisted.web.server import Site
 from twisted.web.resource import Resource
 
@@ -322,14 +322,15 @@ class DownstreamFactory(Factory):
     protocol = Downstream
 
 
+def twisted_log(eventDict):
+    if 'failure' in eventDict:
+        log.error(eventDict.get('why') or 'Unhandled exception' + '\n' + str(eventDict['failure'].getTraceback()))
+    elif 'warning' in eventDict:
+        log.warning(eventDict['warning'])
+    else:
+        log.debug(' '.join([str(m) for m in eventDict['message']]))
+
 def setup_logging(level, facility, appName):
-    ##twisted_logging = PythonLoggingObserver('twisted')
-    #twisted_logging.start()
-
-    #logging.getLogger("twisted").setLevel(level)
-
-    startLogging(sys.stdout) #twisted_logging)
-
     global log
     log = logging.getLogger(appName)
     log.setLevel(level)
@@ -353,14 +354,12 @@ def setup_logging(level, facility, appName):
 
     log.addHandler(syslogHandler)
     log.addHandler(stderrHandler)
-    #startLoggingWithObserver(twisted_logging)
 
-def xxxsetup_logging(level, facility, appName):
-    global log
-    log = logging.getLogger(appName)
-    log.setLevel(level)
-    startLogging(sys.stdout) #twisted_logging)
-
+    if level == logging.DEBUG:
+        # no idea what I'm doing
+        observer = PythonLoggingObserver()
+        observer.start()
+        startLogging(sys.stderr)
 
 class StateResource(Resource):
 
@@ -555,7 +554,7 @@ def main():
 
     setup_logging(level, facility, appName)
 
-    log.debug("{appName} starting up")
+    log.debug(f"{appName} starting up")
     observer.trace_parser = args.debugParser
     observer.log = log
     boundingbox.log = log
@@ -582,7 +581,7 @@ def main():
 
     flight_observer = observer.FlightObserver()
 
-    retryPolicy = backoffPolicy(initialDelay=120, factor = 2.71828, maxDelay=600)
+    retryPolicy = backoffPolicy(initialDelay=120, factor=2, maxDelay=600)
 
     upstream_server_factory = None
     if args.upstreamServer:
