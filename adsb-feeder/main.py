@@ -112,12 +112,13 @@ class UpstreamClientFactory(Factory):
     upstreams = set()
     connects = dict()
 
-    def __init__(self, protocol, flight_observer, permanent, parent):
+    def __init__(self, protocol, flight_observer, permanent, parent, typus):
         self.protocol = protocol
         self.clients = set()
         self.flight_observer = flight_observer
         self.permanent = permanent
         self.parent = parent
+        self.typus = typus
 
     def countConnect(self, host):
         if not host in self.connects:
@@ -203,7 +204,9 @@ class WSServerProtocol(WebSocketServerProtocol):
         if not self.proto:
             raise ConnectionDeny(ConnectionDeny.BAD_REQUEST)
 
-        log.debug(f"chosen protocol {self.proto} for {self.forwarded_for} via {self.peer}")
+        self.user_agent = request.headers.get('user-agent',"")
+
+        log.debug(f"chosen protocol {self.proto} for {self.forwarded_for} via {self.peer} ua={self.user_agent}")
 
         if 'token' in request.params:
             try:
@@ -363,12 +366,19 @@ class StateResource(Resource):
     <th>feed</th>
     <th>(re)connects)</th>
     <th>msgs received</th>
+    <th>total byes</th>
+    <th>typus</th>
 </tr>"""
         for u in self.feeder_factory.upstreams:
             upstreams += (
+
+#FIXME          self.feeder_factory.connects[host]['connects'] += 1
                 f"<tr><td>{u.transport.getPeer()}</td>"
                 f"<td>{u.feedstats['connects']}</td>"
-                f"<td>{u.feedstats['lines']}</td></tr>\n"
+                f"<td>{u.feedstats['lines']}</td>"
+                f"<td>{u.feedstats['bytes']}</td>"
+                f"<td>{u.factory.typus}</td>"
+                f"</tr>\n"
             )
         upstreams += "</table>"
 
@@ -380,7 +390,7 @@ class StateResource(Resource):
                 tcp_clients += f"\t\t<tr><td>{client.transport.getPeer()}</td><td>{client.bbox}</td></tr>\n"
 
             if isinstance(client, WSServerProtocol):
-                ws_clients += f"\t\t<tr><td>{client.peer}</td><td>{client.bbox}</td><td>{client.usr}</td><td>{client.forwarded_for}</td></tr>\n"
+                ws_clients += f"\t\t<tr><td>{client.peer}</td><td>{client.bbox}</td><td>{client.usr}</td><td>{client.forwarded_for}</td><td>{client.user_agent}</td></tr>\n"
 
         aircraft = """
 <H2>Aircraft observed</H2>
@@ -518,7 +528,7 @@ def main():
 
     setup_logging(level, facility, appName)
 
-    log.debug("------------------")
+    log.debug("{appName} starting up")
     observer.trace_parser = args.debugParser
     observer.log = log
     boundingbox.log = log
@@ -549,12 +559,12 @@ def main():
 
     upstream_server_factory = None
     if args.upstreamServer:
-        upstream_server_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, True, feeders)
+        upstream_server_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, True, feeders, "listener")
         upstream_server_endpoint = serverFromString(reactor, args.upstreamServer)
         feeder_server = StreamServerEndpointService(upstream_server_endpoint, upstream_server_factory)
         feeder_server.setServiceParent(feeders)
 
-    feeder_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, args.permanent, feeders)
+    feeder_factory = UpstreamClientFactory(UpstreamProtocol, flight_observer, args.permanent, feeders, "outbound connector")
     for dest in args.upstreams:
         feeder_endpoint = clientFromString(reactor, dest)
         feeder = ClientService(feeder_endpoint, feeder_factory, retryPolicy=retryPolicy)
