@@ -264,10 +264,10 @@ class WSServerProtocol(WebSocketServerProtocol):
 
 
     def onMessage(self, payload, isBinary):
-        if isBinary:
-            log.debug(f"Binary message received: {len(payload)} bytes")
-        else:
-            log.debug(f"Text message received: {payload.decode('utf8')}")
+        # if isBinary:
+        #     log.debug(f"Binary message received: {len(payload)} bytes")
+        # else:
+        #     log.debug(f"Text message received: {payload.decode('utf8')}")
 
         (success, bbox, response) = self.factory.bbox_validator.validate_str(payload)
         if not success:
