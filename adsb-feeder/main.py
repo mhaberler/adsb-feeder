@@ -84,10 +84,13 @@ def within(lat, lon, alt, bbox):
 
 
 class UpstreamProtocol(basic.LineOnlyReceiver):
-    delimiter = b'\r\n'
 
-    def __init__(self):
+    MAX_LENGTH = 16384
+
+    def __init__(self, max_length_errors=5):
         self.feedstats = Counter(bytes=0, lines=0)
+        self.length_errors = 0
+        self.max_length_errors = max_length_errors
 
     def connectionMade(self):
         log.debug(f'[x] upstream connection established to'
@@ -106,6 +109,45 @@ class UpstreamProtocol(basic.LineOnlyReceiver):
         self.feedstats['bytes'] += len(line)
         self.factory.flight_observer.parse(line.decode())
 
+    def lineLengthExceeded(self, line):
+        self.length_errors += 1
+        if self.length_errors > self.max_length_errors:
+            log.error(f'[ ] line length {len(line)} exceeded too often ({self.length_errors}) {line[:10]}..{line[-10:]}, closing upstream {self.transport.getPeer()}')
+            return self.transport.loseConnection()
+
+
+    def dataReceived(self, data):
+
+        # this is buggy on buffer splits but a start
+        for line in  data.splitlines():
+            self.lineReceived(line)
+
+    # this needs fixing:
+    # def dataReceived(self, data):
+    #     """
+    #     Translates bytes into lines, and calls lineReceived.
+    #     split on universal newlines with splitlines()
+    #     """
+    #     b = self._buffer + data
+    #     lines = b.splitlines(False)
+    #     if ord(b[-1]) == 10:
+    #         # buffer ended in newline - complete
+    #         self._buffer = ''
+    #     else:
+    #         self._buffer = lines.pop(-1)
+    #     for line in lines:
+    #         if self.transport.disconnecting:
+    #             # this is necessary because the transport may be told to lose
+    #             # the connection by a line within a larger packet, and it is
+    #             # important to disregard all the lines in that packet following
+    #             # the one that told it to close.
+    #             return
+    #         if len(line) > self.MAX_LENGTH:
+    #             return self.lineLengthExceeded(line)
+    #         else:
+    #             self.lineReceived(line)
+    #     if len(self._buffer) > self.MAX_LENGTH:
+    #         return self.lineLengthExceeded(self._buffer)
 
 class UpstreamClientFactory(Factory):
 
