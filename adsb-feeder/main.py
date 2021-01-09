@@ -582,7 +582,7 @@ def main():
 
     flight_observer = observer.FlightObserver()
 
-    retryPolicy = backoffPolicy(initialDelay=0.5, factor = 2.71828, maxDelay=20)
+    retryPolicy = backoffPolicy(initialDelay=120, factor = 2.71828, maxDelay=600)
 
     upstream_server_factory = None
     if args.upstreamServer:
