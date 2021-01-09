@@ -184,13 +184,13 @@ class WSServerProtocol(WebSocketServerProtocol):
         if self.run:
             self.sendPing()
             #self.factory.pingsSent[self.peer] += 1
-            log.debug(f"Ping sent to {self.peer}")
+            #log.debug(f"Ping sent to {self.peer}")
             reactor.callLater(PING_EVERY, self.doPing)
 
     def onPong(self, payload):
         #self.factory.pongsReceived[self.peer] += 1
         self.last_heard = datetime.utcnow().timestamp()
-        log.debug(f"Pong received from {self.peer}")
+        #log.debug(f"Pong received from {self.peer}")
 
 
     def onConnect(self, request):

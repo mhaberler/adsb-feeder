@@ -23,7 +23,7 @@ class BoundingBox(object):
         for k, v in d.items():
             if k in self.validKeys:
                 setattr(self, k, float(v))
-        log.debug(f"new bbox = {repr(self)}")
+        #log.debug(f"new bbox = {repr(self)}")
 
     def fromParams(self, params):
         for k in self.validKeys:
@@ -31,11 +31,11 @@ class BoundingBox(object):
                 try:
                     v = float(params[k][0])
                     setattr(self, k, v)
-                    log.debug(f"set {k}={v} from {params}")
+                    #log.debug(f"set {k}={v} from {params}")
                 except Exception as e:
                     log.info(f"parsing param {k} from {params} :  {e}")
                     pass
-        log.debug(f"new bbox = {repr(self)}")
+        #log.debug(f"new bbox = {repr(self)}")
 
     def __repr__(self):
         return (
