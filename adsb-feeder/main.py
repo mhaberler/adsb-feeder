@@ -46,9 +46,12 @@ from autobahn.websocket.types import ConnectionDeny
 import sys
 import os
 import logging
-import logging.handlers
+import logging.handlers as handlers
 import syslog
 import jsonschema
+import bz2
+import signal
+import setproctitle
 
 import orjson
 import argparse
@@ -63,7 +66,9 @@ import boundingbox
 from jwt import InvalidAudienceError, ExpiredSignatureError, InvalidSignatureError, PyJWTError
 from jwtauth import *
 
-appName = "Feeder"
+appName = "adsb-feeder"
+defaultLoglevel = 'INFO'
+defaultLogDir = "/var/log/adsb-feeder"
 facility = syslog.LOG_LOCAL1
 PING_EVERY = 30 # secs for now
 
@@ -361,45 +366,27 @@ class DownstreamFactory(Factory):
 
     protocol = Downstream
 
-
-def twisted_log(eventDict):
-    if 'failure' in eventDict:
-        log.error(eventDict.get('why') or 'Unhandled exception' + '\n' + str(eventDict['failure'].getTraceback()))
-    elif 'warning' in eventDict:
-        log.warning(eventDict['warning'])
-    else:
-        log.debug(' '.join([str(m) for m in eventDict['message']]))
-
-def setup_logging(level, facility, appName):
+def setup_logging(level, appName, logDir):
     global log
     log = logging.getLogger(appName)
     log.setLevel(level)
 
+    logHandler = handlers.TimedRotatingFileHandler(f"{logDir}/{appName}.log",
+                                                   when='midnight',
+                                                   backupCount=7)
+
     fmt = logging.Formatter('%(asctime)s.%(msecs)03d %(levelname)-3s '
                             '%(filename)-12s%(lineno)3d %(message)s')
-    stderrHandler = logging.StreamHandler(sys.stderr)
-    stderrHandler.setLevel(level)
-    stderrHandler.setFormatter(fmt)
-
-    if sys.platform.startswith('linux'):
-        syslogHandler = logging.handlers.SysLogHandler(
-            address='/dev/log', facility=facility)
-    elif sys.platform.startswith('darwin'):
-        syslogHandler = logging.handlers.SysLogHandler(
-            address='/var/run/syslog', facility=facility)
-    else:
-        syslogHandler = logging.handlers.SysLogHandler(facility=facility)
-    syslogHandler.setFormatter(fmt)
-    syslogHandler.setLevel(level)
-
-    log.addHandler(syslogHandler)
-    log.addHandler(stderrHandler)
 
     if level == logging.DEBUG:
-        # no idea what I'm doing
-        observer = PythonLoggingObserver()
-        observer.start()
-        startLogging(sys.stderr)
+        stderrHandler = logging.StreamHandler(sys.stderr)
+        stderrHandler.setLevel(level)
+        stderrHandler.setFormatter(fmt)
+        log.addHandler(stderrHandler)
+
+    logHandler.setFormatter(fmt)
+    logHandler.setLevel(level)
+    log.addHandler(logHandler)
 
 class StateResource(Resource):
 
@@ -579,6 +566,13 @@ def main():
                                  'WARNING', 'ERROR', 'CRITICAL'],
                         dest="logLevel")
 
+    parser.add_argument('--log-dir',
+                        dest='logDir',
+                        action='store',
+                        default=defaultLogDir,
+                        type=str,
+                        help='directory to save logfiles in')
+
     parser.add_argument('-D', '--debug-parser',
                         help="debug the inner loop - lots of log output!",
                         nargs='?',
@@ -592,7 +586,7 @@ def main():
     if args.logLevel:
         level = getattr(logging, args.logLevel)
 
-    setup_logging(level, facility, appName)
+    setup_logging(level, appName, args.logDir)
 
     log.debug(f"{appName} starting up")
     observer.trace_parser = args.debugParser
@@ -660,6 +654,8 @@ def main():
                      flight_observer, feeder_factory)
     lc.start(0.3)
 
+    setproctitle.setproctitle((f"{appName} "
+                               f"logdir={args.logDir} "))
     reactor.run()
 
 
