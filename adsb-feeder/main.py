@@ -60,6 +60,7 @@ import base64
 from collections import Counter
 import geojson
 import geobuf
+import zmq
 
 import observer
 import boundingbox
@@ -70,6 +71,8 @@ appName = "adsb-feeder"
 defaultLoglevel = 'INFO'
 defaultLogDir = "/var/log/adsb-feeder"
 facility = syslog.LOG_LOCAL1
+pubSocket = "ipc:///tmp/adsb-json-feed"
+
 PING_EVERY = 30 # secs for now
 
 def within(lat, lon, alt, bbox):
@@ -183,9 +186,11 @@ class UpstreamClientFactory(Factory):
             self.parent.stopService()
 
 
-def client_updater(flight_observer, feeder_factory):
+def client_updater(flight_observer, feeder_factory, zmqSocket):
 
-    if not feeder_factory.clients:
+    _topic = b'adsb-json'
+
+    if not feeder_factory.clients and not zmqSocket:
         return
 
     # BATCH THIS!!
@@ -201,20 +206,25 @@ def client_updater(flight_observer, feeder_factory):
         lon = o.getLon()
         alt = o.getAltitude()
 
-        r = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
-        pbf = geobuf.encode(o.__geo_interface__)
+        js = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
+        if zmqSocket:
+            zmqSocket.send_multipart([_topic, js])
 
+        if not feeder_factory.clients:
+            continue
+
+        pbf = geobuf.encode(o.__geo_interface__)
         for client in feeder_factory.clients:
             if within(lat, lon, alt, client.bbox):
                 if isinstance(client, Downstream):
-                    client.transport.write(r)
+                    client.transport.write(js)
                 if isinstance(client, WSServerProtocol):
                     if not client.usr:
                         continue
                     if client.proto == 'adsb-geobuf':
                         client.sendMessage(pbf, True)
                     if client.proto == 'adsb-json':
-                        client.sendMessage(r, False)
+                        client.sendMessage(js, False)
         o.resetUpdated()
 
 
@@ -580,6 +590,14 @@ def main():
                         default=False,
                         dest="debugParser")
 
+    parser.add_argument('--pub-socket',
+                        dest='pubSocket',
+                        action='store',
+                        default=None,
+                        type=str,
+                        help='publishing socket like ipc:///tmp/sondehub-feed or tcp://127.0.0.1:5001')
+
+
     args = parser.parse_args()
 
     level = logging.WARNING
@@ -650,8 +668,15 @@ def main():
                                          downstream_factory, websocket_factory))
         webserver = serverFromString(reactor, args.reporter).listen(Site(root))
 
+
+    zmqSocket = None
+    if args.pubSocket:
+        context = zmq.Context()
+        zmqSocket = context.socket(zmq.PUB)
+        zmqSocket.bind(args.pubSocket)
+
     lc = LoopingCall(client_updater,
-                     flight_observer, feeder_factory)
+                     flight_observer, feeder_factory, zmqSocket)
     lc.start(0.3)
 
     setproctitle.setproctitle((f"{appName} "
