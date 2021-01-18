@@ -1,4 +1,6 @@
 const WebSocket = require('ws');
+const Pbf = require('pbf');
+const geobuf = require("geobuf");
 
 var args = process.argv.slice(2);
 console.log('args: ', args);
@@ -13,8 +15,8 @@ var bbox = {
     "max_altitude": 10000000
 };
 
-const ws = new WebSocket(uri);
-
+const ws = new WebSocket(uri, ['adsb-geobuf']);
+ws.binaryType = "arraybuffer";
 ws.on('open', function open() {
     console.log("connection opened, sending bounding box");
     // example for dynamically changing the bbox of the updates
@@ -22,6 +24,8 @@ ws.on('open', function open() {
 });
 
 ws.on('message', function incoming(data) {
-    const msg = JSON.parse(data);
-    console.log(msg.icao24, msg.callsign, msg.lat, msg.lon, msg.altitude, msg.speed, msg.vspeed, msg.heading);
+    console.log(data);
+
+    var geojson = geobuf.decode(new Pbf(data));
+    console.log(geojson);
 });
