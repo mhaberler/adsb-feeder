@@ -595,7 +595,7 @@ def main():
                         action='store',
                         default=None,
                         type=str,
-                        help='publishing socket like ipc:///tmp/sondehub-feed or tcp://127.0.0.1:5001')
+                        help='publishing socket like ipc:///tmp/adsb-json-feed or tcp://127.0.0.1:5001')
 
 
     args = parser.parse_args()
