@@ -186,11 +186,11 @@ class UpstreamClientFactory(Factory):
             self.parent.stopService()
 
 
-def client_updater(flight_observer, feeder_factory, pubSocket, pushSocket):
+def client_updater(flight_observer, feeder_factory, pubSocket, dealerSocket):
 
     _topic = b'adsb-json'
 
-    if not feeder_factory.clients and not pubSocket and not pushSocket:
+    if not feeder_factory.clients and not pubSocket and not dealerSocket:
         return
 
     # BATCH THIS!!
@@ -209,8 +209,11 @@ def client_updater(flight_observer, feeder_factory, pubSocket, pushSocket):
         js = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
         if pubSocket:
             pubSocket.send_multipart([_topic, js])
-        if pushSocket:
-            pushSocket.send(js)
+        if dealerSocket:
+            try:
+                dealerSocket.send(js,zmq.DONTWAIT)
+            except zmq.error.Again:
+                pass
 
         if not feeder_factory.clients:
             continue
@@ -607,12 +610,12 @@ def main():
                         type=str,
                         help='publishing socket like ipc:///tmp/adsb-json-feed or tcp://127.0.0.1:5001')
 
-    parser.add_argument('--push-socket',
-                        dest='pushSocket',
+    parser.add_argument('--dealer-socket',
+                        dest='dealerSocket',
                         action='store',
                         default=None,
                         type=str,
-                        help='PUSH socket like ipc:///tmp/adsb-json-feed-push or tcp://127.0.0.1:5001')
+                        help='DEALER socket like ipc:///tmp/adsb-json-feed-push or tcp://127.0.0.1:5001')
 
 
     args = parser.parse_args()
@@ -693,13 +696,13 @@ def main():
         pubSocket = context.socket(zmq.PUB)
         pubSocket.bind(args.pubSocket)
 
-    pushSocket = None
-    if args.pushSocket:
-        pushSocket = context.socket(zmq.PUSH)
-        pushSocket.bind(args.pushSocket)
+    dealerSocket = None
+    if args.dealerSocket:
+        dealerSocket = context.socket(zmq.DEALER)
+        dealerSocket.bind(args.dealerSocket)
 
     lc = LoopingCall(client_updater,
-                     flight_observer, feeder_factory, pubSocket, pushSocket)
+                     flight_observer, feeder_factory, pubSocket, dealerSocket)
     lc.start(0.3)
 
     setproctitle.setproctitle((f"{appName} "
