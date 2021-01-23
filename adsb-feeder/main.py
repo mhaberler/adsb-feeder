@@ -71,7 +71,7 @@ appName = "adsb-feeder"
 defaultLoglevel = 'INFO'
 defaultLogDir = "/var/log/adsb-feeder"
 facility = syslog.LOG_LOCAL1
-pubSocket = "ipc:///tmp/adsb-json-feed"
+#pubSocket = "ipc:///tmp/adsb-json-feed"
 
 PING_EVERY = 30 # secs for now
 
@@ -186,11 +186,11 @@ class UpstreamClientFactory(Factory):
             self.parent.stopService()
 
 
-def client_updater(flight_observer, feeder_factory, zmqSocket):
+def client_updater(flight_observer, feeder_factory, pubSocket, pushSocket):
 
     _topic = b'adsb-json'
 
-    if not feeder_factory.clients and not zmqSocket:
+    if not feeder_factory.clients and not pubSocket and not pushSocket:
         return
 
     # BATCH THIS!!
@@ -207,8 +207,10 @@ def client_updater(flight_observer, feeder_factory, zmqSocket):
         alt = o.getAltitude()
 
         js = orjson.dumps(o.__geo_interface__, option=orjson.OPT_APPEND_NEWLINE)
-        if zmqSocket:
-            zmqSocket.send_multipart([_topic, js])
+        if pubSocket:
+            pubSocket.send_multipart([_topic, js])
+        if pushSocket:
+            pushSocket.send(js)
 
         if not feeder_factory.clients:
             continue
@@ -376,6 +378,14 @@ class DownstreamFactory(Factory):
 
     protocol = Downstream
 
+
+def Bzip2Rotator(source, dest):
+    with open(source, "rb") as sf:
+        compressed = bz2.compress(sf.read(), 9)
+        with open(f"{dest}.bz2", "wb") as df:
+            df.write(compressed)
+    os.remove(source)
+
 def setup_logging(level, appName, logDir):
     global log
     log = logging.getLogger(appName)
@@ -384,7 +394,7 @@ def setup_logging(level, appName, logDir):
     logHandler = handlers.TimedRotatingFileHandler(f"{logDir}/{appName}.log",
                                                    when='midnight',
                                                    backupCount=7)
-
+    logHandler.rotator = Bzip2Rotator
     fmt = logging.Formatter('%(asctime)s.%(msecs)03d %(levelname)-3s '
                             '%(filename)-12s%(lineno)3d %(message)s')
 
@@ -597,6 +607,13 @@ def main():
                         type=str,
                         help='publishing socket like ipc:///tmp/adsb-json-feed or tcp://127.0.0.1:5001')
 
+    parser.add_argument('--push-socket',
+                        dest='pushSocket',
+                        action='store',
+                        default=None,
+                        type=str,
+                        help='PUSH socket like ipc:///tmp/adsb-json-feed-push or tcp://127.0.0.1:5001')
+
 
     args = parser.parse_args()
 
@@ -669,14 +686,20 @@ def main():
         webserver = serverFromString(reactor, args.reporter).listen(Site(root))
 
 
-    zmqSocket = None
+    pubSocket = None
+    context = zmq.Context()
+
     if args.pubSocket:
-        context = zmq.Context()
-        zmqSocket = context.socket(zmq.PUB)
-        zmqSocket.bind(args.pubSocket)
+        pubSocket = context.socket(zmq.PUB)
+        pubSocket.bind(args.pubSocket)
+
+    pushSocket = None
+    if args.pushSocket:
+        pushSocket = context.socket(zmq.PUSH)
+        pushSocket.bind(args.pushSocket)
 
     lc = LoopingCall(client_updater,
-                     flight_observer, feeder_factory, zmqSocket)
+                     flight_observer, feeder_factory, pubSocket, pushSocket)
     lc.start(0.3)
 
     setproctitle.setproctitle((f"{appName} "
