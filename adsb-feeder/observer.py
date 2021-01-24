@@ -113,7 +113,7 @@ class Observation(object):
             },
             'geometry': {
                 'type': 'Point',
-                'coordinates': (self.__lon, self.__lat)
+                'coordinates': (self.__lon, self.__lat, float(self.__altitude) * 0.3048)
             }
         }
 
